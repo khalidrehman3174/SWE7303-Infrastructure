@@ -1,8 +1,9 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
   Finpay Technologies - Application Pipeline
-  CodePipeline with CodeBuild to build, test, and deploy the Frontend (React)
-  and Backend (PHP) container images to ECS Fargate via ECR.
+  Single CodePipeline with CodeBuild to build, test, and deploy the
+  Finpay PHP application container image to ECS Fargate via ECR.
+  Source is the SWE7303-Application GitHub repository.
 
 # -------------------------------------------------------
 # Parameters
@@ -16,16 +17,17 @@ Parameters:
 
   GitHubOwner:
     Type: String
+    Default: khalidrehman3174
     Description: GitHub organisation or username
 
   GitHubRepo:
     Type: String
-    Default: SWE7303-Infrastructure
+    Default: SWE7303-Application
     Description: GitHub repository name for the application code
 
   GitHubBranch:
     Type: String
-    Default: main
+    Default: dev
     Description: GitHub branch to trigger the pipeline from
 
   CodeStarConnectionArn:
@@ -35,7 +37,7 @@ Parameters:
   ECRStackName:
     Type: String
     Default: finpay-ecr
-    Description: ECR stack name (to import repository URIs)
+    Description: ECR stack name (to import backend repository URI)
 
   ECSStackName:
     Type: String
@@ -47,28 +49,27 @@ Parameters:
     Default: finpay-infra-pipeline
     Description: Infra pipeline stack name (to import shared artifact bucket)
 
-  FrontendDirectory:
-    Type: String
-    Default: frontend
-    Description: Directory in the repo containing the frontend application
-
-  BackendDirectory:
-    Type: String
-    Default: backend
-    Description: Directory in the repo containing the backend application
-
 # -------------------------------------------------------
 # Resources
 # -------------------------------------------------------
 Resources:
 
   # ---------------------------------------------------
-  # 1. CodeBuild IAM Role
+  # 1. CloudWatch Log Group for CodeBuild
+  # ---------------------------------------------------
+  AppBuildLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/codebuild/finpay-${EnvironmentName}/app"
+      RetentionInDays: 14
+
+  # ---------------------------------------------------
+  # 2. CodeBuild IAM Role
   # ---------------------------------------------------
   CodeBuildRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "finpay-${EnvironmentName}-codebuild-role"
+      RoleName: !Sub "finpay-${EnvironmentName}-app-codebuild-role"
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -77,7 +78,7 @@ Resources:
               Service: codebuild.amazonaws.com
             Action: sts:AssumeRole
       Policies:
-        - PolicyName: CodeBuildPolicy
+        - PolicyName: AppCodeBuildPolicy
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
@@ -100,11 +101,8 @@ Resources:
                   - ecr:InitiateLayerUpload
                   - ecr:UploadLayerPart
                   - ecr:CompleteLayerUpload
-                Resource:
-                  - !ImportValue
-                    Fn::Sub: "${ECRStackName}-FrontendRepositoryArn"
-                  - !ImportValue
-                    Fn::Sub: "${ECRStackName}-BackendRepositoryArn"
+                Resource: !ImportValue
+                  Fn::Sub: "${ECRStackName}-BackendRepositoryArn"
               - Effect: Allow
                 Action:
                   - s3:GetObject
@@ -130,7 +128,7 @@ Resources:
           Value: !Ref EnvironmentName
 
   # ---------------------------------------------------
-  # 2. CodePipeline IAM Role
+  # 3. CodePipeline IAM Role
   # ---------------------------------------------------
   AppPipelineRole:
     Type: AWS::IAM::Role
@@ -166,9 +164,7 @@ Resources:
                 Action:
                   - codebuild:BatchGetBuilds
                   - codebuild:StartBuild
-                Resource:
-                  - !GetAtt FrontendBuildProject.Arn
-                  - !GetAtt BackendBuildProject.Arn
+                Resource: !GetAtt AppBuildProject.Arn
               - Effect: Allow
                 Action:
                   - ecs:DescribeServices
@@ -197,101 +193,13 @@ Resources:
           Value: !Ref EnvironmentName
 
   # ---------------------------------------------------
-  # 3. CloudWatch Log Groups for CodeBuild
+  # 4. CodeBuild Project
   # ---------------------------------------------------
-  FrontendBuildLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub "/codebuild/finpay-${EnvironmentName}/frontend"
-      RetentionInDays: 14
-
-  BackendBuildLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub "/codebuild/finpay-${EnvironmentName}/backend"
-      RetentionInDays: 14
-
-  # ---------------------------------------------------
-  # 4. CodeBuild Projects
-  # ---------------------------------------------------
-
-  # Frontend Build Project
-  FrontendBuildProject:
+  AppBuildProject:
     Type: AWS::CodeBuild::Project
     Properties:
-      Name: !Sub "finpay-${EnvironmentName}-frontend-build"
-      Description: Build, test, and push the Finpay frontend Docker image to ECR
-      ServiceRole: !GetAtt CodeBuildRole.Arn
-      Environment:
-        Type: LINUX_CONTAINER
-        ComputeType: BUILD_GENERAL1_SMALL
-        Image: aws/codebuild/standard:7.0
-        PrivilegedMode: true
-        EnvironmentVariables:
-          - Name: AWS_ACCOUNT_ID
-            Value: !Ref AWS::AccountId
-          - Name: AWS_DEFAULT_REGION
-            Value: !Ref AWS::Region
-          - Name: ECR_REPO_URI
-            Value: !ImportValue
-              Fn::Sub: "${ECRStackName}-FrontendRepositoryUri"
-          - Name: ENVIRONMENT
-            Value: !Ref EnvironmentName
-          - Name: IMAGE_TAG
-            Value: latest
-      Source:
-        Type: CODEPIPELINE
-        BuildSpec: !Sub |
-          version: 0.2
-          phases:
-            install:
-              runtime-versions:
-                nodejs: 18
-              commands:
-                - echo "Installing dependencies..."
-                - cd ${FrontendDirectory}
-                - npm ci
-            pre_build:
-              commands:
-                - echo "Running frontend tests..."
-                - npm test -- --watchAll=false --passWithNoTests
-                - echo "Logging in to Amazon ECR..."
-                - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
-                - COMMIT_HASH=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
-                - IMAGE_TAG_VERSIONED=v$COMMIT_HASH
-            build:
-              commands:
-                - echo "Building frontend Docker image..."
-                - docker build -t $ECR_REPO_URI:$IMAGE_TAG_VERSIONED .
-                - docker tag $ECR_REPO_URI:$IMAGE_TAG_VERSIONED $ECR_REPO_URI:latest
-            post_build:
-              commands:
-                - echo "Pushing frontend image to ECR..."
-                - docker push $ECR_REPO_URI:$IMAGE_TAG_VERSIONED
-                - docker push $ECR_REPO_URI:latest
-                - echo "Writing imagedefinitions.json..."
-                - printf '[{"name":"frontend","imageUri":"%s"}]' $ECR_REPO_URI:$IMAGE_TAG_VERSIONED > ../imagedefinitions-frontend.json
-          artifacts:
-            files:
-              - imagedefinitions-frontend.json
-      Artifacts:
-        Type: CODEPIPELINE
-      LogsConfig:
-        CloudWatchLogs:
-          Status: ENABLED
-          GroupName: !Ref FrontendBuildLogGroup
-      Tags:
-        - Key: Project
-          Value: Finpay
-        - Key: Environment
-          Value: !Ref EnvironmentName
-
-  # Backend Build Project
-  BackendBuildProject:
-    Type: AWS::CodeBuild::Project
-    Properties:
-      Name: !Sub "finpay-${EnvironmentName}-backend-build"
-      Description: Build, test, and push the Finpay backend Docker image to ECR
+      Name: !Sub "finpay-${EnvironmentName}-app-build"
+      Description: Build, test, and push the Finpay PHP application Docker image to ECR
       ServiceRole: !GetAtt CodeBuildRole.Arn
       Environment:
         Type: LINUX_CONTAINER
@@ -308,49 +216,15 @@ Resources:
               Fn::Sub: "${ECRStackName}-BackendRepositoryUri"
           - Name: ENVIRONMENT
             Value: !Ref EnvironmentName
-          - Name: IMAGE_TAG
-            Value: latest
       Source:
         Type: CODEPIPELINE
-        BuildSpec: !Sub |
-          version: 0.2
-          phases:
-            install:
-              runtime-versions:
-                php: 8.2
-              commands:
-                - echo "Installing PHP dependencies..."
-                - cd ${BackendDirectory}
-                - composer install --no-interaction --prefer-dist --optimize-autoloader
-            pre_build:
-              commands:
-                - echo "Running backend tests..."
-                - ./vendor/bin/phpunit --testdox || true
-                - echo "Logging in to Amazon ECR..."
-                - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
-                - COMMIT_HASH=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
-                - IMAGE_TAG_VERSIONED=v$COMMIT_HASH
-            build:
-              commands:
-                - echo "Building backend Docker image..."
-                - docker build -t $ECR_REPO_URI:$IMAGE_TAG_VERSIONED .
-                - docker tag $ECR_REPO_URI:$IMAGE_TAG_VERSIONED $ECR_REPO_URI:latest
-            post_build:
-              commands:
-                - echo "Pushing backend image to ECR..."
-                - docker push $ECR_REPO_URI:$IMAGE_TAG_VERSIONED
-                - docker push $ECR_REPO_URI:latest
-                - echo "Writing imagedefinitions.json..."
-                - printf '[{"name":"backend","imageUri":"%s"}]' $ECR_REPO_URI:$IMAGE_TAG_VERSIONED > ../imagedefinitions-backend.json
-          artifacts:
-            files:
-              - imagedefinitions-backend.json
+        BuildSpec: buildspec.yml
       Artifacts:
         Type: CODEPIPELINE
       LogsConfig:
         CloudWatchLogs:
           Status: ENABLED
-          GroupName: !Ref BackendBuildLogGroup
+          GroupName: !Ref AppBuildLogGroup
       Tags:
         - Key: Project
           Value: Finpay
@@ -390,55 +264,27 @@ Resources:
                 - Name: AppSource
               RunOrder: 1
 
-        # ── Stage 2: Build + Test (parallel) ────────────
+        # ── Stage 2: Build + Test ────────────────────────
         - Name: Build-and-Test
           Actions:
-            - Name: BuildFrontend
+            - Name: BuildApp
               ActionTypeId:
                 Category: Build
                 Owner: AWS
                 Provider: CodeBuild
                 Version: "1"
               Configuration:
-                ProjectName: !Ref FrontendBuildProject
+                ProjectName: !Ref AppBuildProject
               InputArtifacts:
                 - Name: AppSource
               OutputArtifacts:
-                - Name: FrontendBuildOutput
-              RunOrder: 1
-            - Name: BuildBackend
-              ActionTypeId:
-                Category: Build
-                Owner: AWS
-                Provider: CodeBuild
-                Version: "1"
-              Configuration:
-                ProjectName: !Ref BackendBuildProject
-              InputArtifacts:
-                - Name: AppSource
-              OutputArtifacts:
-                - Name: BackendBuildOutput
+                - Name: AppBuildOutput
               RunOrder: 1
 
-        # ── Stage 3: Deploy to ECS (parallel) ───────────
+        # ── Stage 3: Deploy to ECS ───────────────────────
         - Name: Deploy-to-ECS
           Actions:
-            - Name: DeployFrontend
-              ActionTypeId:
-                Category: Deploy
-                Owner: AWS
-                Provider: ECS
-                Version: "1"
-              Configuration:
-                ClusterName: !ImportValue
-                  Fn::Sub: "${ECSStackName}-ClusterName"
-                ServiceName: !ImportValue
-                  Fn::Sub: "${ECSStackName}-FrontendServiceName"
-                FileName: imagedefinitions-frontend.json
-              InputArtifacts:
-                - Name: FrontendBuildOutput
-              RunOrder: 1
-            - Name: DeployBackend
+            - Name: DeployApp
               ActionTypeId:
                 Category: Deploy
                 Owner: AWS
@@ -449,9 +295,9 @@ Resources:
                   Fn::Sub: "${ECSStackName}-ClusterName"
                 ServiceName: !ImportValue
                   Fn::Sub: "${ECSStackName}-BackendServiceName"
-                FileName: imagedefinitions-backend.json
+                FileName: imagedefinitions.json
               InputArtifacts:
-                - Name: BackendBuildOutput
+                - Name: AppBuildOutput
               RunOrder: 1
 
       Tags:
@@ -470,14 +316,14 @@ Outputs:
     Export:
       Name: !Sub "${AWS::StackName}-AppPipelineName"
 
-  FrontendBuildProjectName:
-    Description: Frontend CodeBuild project name
-    Value: !Ref FrontendBuildProject
+  AppBuildProjectName:
+    Description: CodeBuild project name
+    Value: !Ref AppBuildProject
     Export:
-      Name: !Sub "${AWS::StackName}-FrontendBuildProjectName"
+      Name: !Sub "${AWS::StackName}-AppBuildProjectName"
 
-  BackendBuildProjectName:
-    Description: Backend CodeBuild project name
-    Value: !Ref BackendBuildProject
+  AppBuildLogGroupName:
+    Description: CodeBuild CloudWatch log group
+    Value: !Ref AppBuildLogGroup
     Export:
-      Name: !Sub "${AWS::StackName}-BackendBuildProjectName"
+      Name: !Sub "${AWS::StackName}-AppBuildLogGroupName"
