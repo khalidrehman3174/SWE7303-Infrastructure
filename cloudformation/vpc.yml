@@ -7,6 +7,12 @@ Parameters:
     Default: finpay
     Description: Project name used for resource naming
 
+    EnvironmentName:
+    Type: String
+    Default: production
+    AllowedValues: [production, staging, development]
+    Description: Deployment environment name
+
 Resources:
 
   # ── VPC ──────────────────────────────────────────────────────
@@ -202,42 +208,42 @@ Resources:
 
 # ── Outputs (referenced by other stacks) ─────────────────────
 Outputs:
-  VPCId:
+  VpcId:
     Value: !Ref VPC
     Export:
-      Name: !Sub ${ProjectName}-vpc-id
+      Name: finpay-vpc-VpcId
 
   PublicSubnet1Id:
     Value: !Ref PublicSubnet1
     Export:
-      Name: !Sub ${ProjectName}-public-subnet-1-id
+      Name: finpay-vpc-PublicSubnet1Id
 
   PublicSubnet2Id:
     Value: !Ref PublicSubnet2
     Export:
-      Name: !Sub ${ProjectName}-public-subnet-2-id
+      Name: finpay-vpc-PublicSubnet2Id
 
   PrivateSubnet1Id:
     Value: !Ref PrivateSubnet1
     Export:
-      Name: !Sub ${ProjectName}-private-subnet-1-id
+      Name: finpay-vpc-PrivateSubnet1Id
 
   PrivateSubnet2Id:
     Value: !Ref PrivateSubnet2
     Export:
-      Name: !Sub ${ProjectName}-private-subnet-2-id
+      Name: finpay-vpc-PrivateSubnet2Id
 
   ALBSecurityGroupId:
     Value: !Ref ALBSecurityGroup
     Export:
-      Name: !Sub ${ProjectName}-alb-sg-id
+      Name: finpay-vpc-ALBSecurityGroupId
 
   ECSSecurityGroupId:
     Value: !Ref ECSSecurityGroup
     Export:
-      Name: !Sub ${ProjectName}-ecs-sg-id
+      Name: finpay-vpc-ECSSecurityGroupId
 
   RDSSecurityGroupId:
     Value: !Ref RDSSecurityGroup
     Export:
-      Name: !Sub ${ProjectName}-rds-sg-id
+      Name: finpay-vpc-RDSSecurityGroupId
