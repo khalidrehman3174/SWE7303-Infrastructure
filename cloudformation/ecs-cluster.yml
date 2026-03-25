@@ -27,13 +27,13 @@ Parameters:
 
   FrontendImage:
     Type: String
+    Default: "nginx:latest"
     Description: ECR image URI for the Frontend service (React/PHP)
-    Default: "PLACEHOLDER_FRONTEND_IMAGE"
 
   BackendImage:
     Type: String
+    Default: "nginx:latest"
     Description: ECR image URI for the Backend API service
-    Default: "PLACEHOLDER_BACKEND_IMAGE"
 
   FrontendContainerPort:
     Type: Number
@@ -71,12 +71,12 @@ Parameters:
 
   FrontendDesiredCount:
     Type: Number
-    Default: 2
+    Default: 1
     Description: Desired number of frontend tasks
 
   BackendDesiredCount:
     Type: Number
-    Default: 2
+    Default: 1
     Description: Desired number of backend tasks
 
 # -------------------------------------------------------
@@ -295,7 +295,7 @@ Resources:
           HealthCheck:
             Command:
               - CMD-SHELL
-              - !Sub "curl -f http://localhost:${FrontendContainerPort}/health || exit 1"
+              - "curl -f http://localhost:80/health || exit 1"
             Interval: 30
             Timeout: 5
             Retries: 3
@@ -346,7 +346,7 @@ Resources:
           HealthCheck:
             Command:
               - CMD-SHELL
-              - !Sub "curl -f http://localhost:${BackendContainerPort}/api/health || exit 1"
+              - "curl -f http://localhost:8080/api/health || exit 1"
             Interval: 30
             Timeout: 5
             Retries: 3
@@ -388,9 +388,9 @@ Resources:
         MinimumHealthyPercent: 50
         MaximumPercent: 200
         DeploymentCircuitBreaker:
-          Enable: true
-          Rollback: true
-      HealthCheckGracePeriodSeconds: 60
+          Enable: false
+          Rollback: false
+      HealthCheckGracePeriodSeconds: 120
       EnableECSManagedTags: true
       PropagateTags: SERVICE
       Tags:
@@ -427,9 +427,9 @@ Resources:
         MinimumHealthyPercent: 50
         MaximumPercent: 200
         DeploymentCircuitBreaker:
-          Enable: true
-          Rollback: true
-      HealthCheckGracePeriodSeconds: 60
+          Enable: false
+          Rollback: false
+      HealthCheckGracePeriodSeconds: 120
       EnableECSManagedTags: true
       PropagateTags: SERVICE
       Tags:
@@ -459,7 +459,7 @@ Resources:
     Type: AWS::ApplicationAutoScaling::ScalableTarget
     Properties:
       MaxCapacity: 6
-      MinCapacity: 2
+      MinCapacity: 1
       ResourceId: !Sub "service/${FinpayECSCluster}/${FrontendService.Name}"
       RoleARN: !GetAtt AutoScalingRole.Arn
       ScalableDimension: ecs:service:DesiredCount
@@ -482,7 +482,7 @@ Resources:
     Type: AWS::ApplicationAutoScaling::ScalableTarget
     Properties:
       MaxCapacity: 8
-      MinCapacity: 2
+      MinCapacity: 1
       ResourceId: !Sub "service/${FinpayECSCluster}/${BackendService.Name}"
       RoleARN: !GetAtt AutoScalingRole.Arn
       ScalableDimension: ecs:service:DesiredCount
