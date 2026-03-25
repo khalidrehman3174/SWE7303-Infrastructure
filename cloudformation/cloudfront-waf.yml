@@ -1,0 +1,437 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Finpay Technologies - CloudFront Distribution + WAF Stack
+  Provisions a CloudFront distribution in front of the ALB, a WAF Web ACL
+  with managed rule groups appropriate for a fintech banking application,
+  and associated logging configuration.
+
+# -------------------------------------------------------
+# Parameters
+# -------------------------------------------------------
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: production
+    AllowedValues: [production, staging, development]
+    Description: Deployment environment name
+
+  ALBStackName:
+    Type: String
+    Default: finpay-alb
+    Description: ALB stack name (to import ALB DNS name)
+
+  PriceClass:
+    Type: String
+    Default: PriceClass_100
+    AllowedValues:
+      - PriceClass_100
+      - PriceClass_200
+      - PriceClass_All
+    Description: >
+      CloudFront price class. PriceClass_100 = US/Europe/Canada only (cheapest).
+      PriceClass_All = global edge locations.
+
+  WAFRateLimit:
+    Type: Number
+    Default: 2000
+    MinValue: 100
+    MaxValue: 20000000
+    Description: Maximum requests per 5 minutes per IP before rate limiting kicks in
+
+  EnableWAFLogging:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Enable WAF request logging to S3 (incurs additional cost)
+
+# -------------------------------------------------------
+# Conditions
+# -------------------------------------------------------
+Conditions:
+  IsProduction: !Equals [!Ref EnvironmentName, "production"]
+  EnableLogging: !Equals [!Ref EnableWAFLogging, "true"]
+
+# -------------------------------------------------------
+# Resources
+# -------------------------------------------------------
+Resources:
+
+  # ---------------------------------------------------
+  # 1. WAF Web ACL
+  # NOTE: WAF for CloudFront must be deployed in us-east-1.
+  # If deploying this stack in another region, use a separate
+  # nested stack or deploy this stack directly in us-east-1.
+  # ---------------------------------------------------
+  FinpayWAFWebACL:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: !Sub "finpay-${EnvironmentName}-waf"
+      Scope: CLOUDFRONT
+      Description: !Sub "WAF Web ACL for Finpay ${EnvironmentName} CloudFront distribution"
+      DefaultAction:
+        Allow: {}
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: !Sub "finpay-${EnvironmentName}-waf"
+      Rules:
+
+        # Rule 1: AWS Managed - Common Rule Set (SQLi, XSS, etc.)
+        - Name: AWSManagedRulesCommonRuleSet
+          Priority: 1
+          OverrideAction:
+            None: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: AWSManagedRulesCommonRuleSet
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesCommonRuleSet
+              ExcludedRules: []
+
+        # Rule 2: AWS Managed - Known Bad Inputs
+        - Name: AWSManagedRulesKnownBadInputsRuleSet
+          Priority: 2
+          OverrideAction:
+            None: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: AWSManagedRulesKnownBadInputsRuleSet
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesKnownBadInputsRuleSet
+
+        # Rule 3: AWS Managed - SQL Database (critical for fintech)
+        - Name: AWSManagedRulesSQLiRuleSet
+          Priority: 3
+          OverrideAction:
+            None: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: AWSManagedRulesSQLiRuleSet
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesSQLiRuleSet
+
+        # Rule 4: AWS Managed - Amazon IP Reputation List (bots, scrapers)
+        - Name: AWSManagedRulesAmazonIpReputationList
+          Priority: 4
+          OverrideAction:
+            None: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: AWSManagedRulesAmazonIpReputationList
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesAmazonIpReputationList
+
+        # Rule 5: Rate limiting per IP - prevents brute force on /api/auth
+        - Name: RateLimitPerIP
+          Priority: 5
+          Action:
+            Block: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: RateLimitPerIP
+          Statement:
+            RateBasedStatement:
+              Limit: !Ref WAFRateLimit
+              AggregateKeyType: IP
+
+        # Rule 6: Block requests to sensitive API paths from non-authenticated origins
+        - Name: BlockSensitiveAPIAccess
+          Priority: 6
+          Action:
+            Block: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: BlockSensitiveAPIAccess
+          Statement:
+            AndStatement:
+              Statements:
+                - ByteMatchStatement:
+                    SearchString: "/api/admin"
+                    FieldToMatch:
+                      UriPath: {}
+                    TextTransformations:
+                      - Priority: 0
+                        Type: LOWERCASE
+                    PositionalConstraint: STARTS_WITH
+                - NotStatement:
+                    Statement:
+                      IPSetReferenceStatement:
+                        ARN: !GetAtt AdminIPSet.Arn
+
+        # Rule 7: AWS Managed - Anonymous IP List (VPNs, Tor, proxies)
+        - Name: AWSManagedRulesAnonymousIpList
+          Priority: 7
+          OverrideAction:
+            Count: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: AWSManagedRulesAnonymousIpList
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesAnonymousIPList
+
+      Tags:
+        - Key: Project
+          Value: Finpay
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # ---------------------------------------------------
+  # 2. Admin IP Set (for Rule 6 above)
+  # ---------------------------------------------------
+  AdminIPSet:
+    Type: AWS::WAFv2::IPSet
+    Properties:
+      Name: !Sub "finpay-${EnvironmentName}-admin-ips"
+      Scope: CLOUDFRONT
+      Description: Trusted IP addresses allowed to access admin API endpoints
+      IPAddressVersion: IPV4
+      Addresses:
+        - "0.0.0.0/32"    # PLACEHOLDER - replace with actual admin IP(s)
+      Tags:
+        - Key: Project
+          Value: Finpay
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # ---------------------------------------------------
+  # 3. CloudFront Distribution
+  # ---------------------------------------------------
+  FinpayCloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: !Sub "Finpay ${EnvironmentName} - Mobile Banking Platform"
+        Enabled: true
+        HttpVersion: http2and3
+        PriceClass: !Ref PriceClass
+        WebACLId: !GetAtt FinpayWAFWebACL.Arn
+
+        # Origin: ALB
+        Origins:
+          - Id: FinpayALBOrigin
+            DomainName: !ImportValue
+              Fn::Sub: "${ALBStackName}-ALBDNSName"
+            CustomOriginConfig:
+              HTTPPort: 80
+              HTTPSPort: 443
+              OriginProtocolPolicy: http-only
+              OriginSSLProtocols:
+                - TLSv1.2
+            OriginCustomHeaders:
+              - HeaderName: X-Custom-Header
+                HeaderValue: !Sub "finpay-${EnvironmentName}-cf-origin"
+
+        # Default cache behaviour - Frontend
+        DefaultCacheBehavior:
+          TargetOriginId: FinpayALBOrigin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+            - PUT
+            - POST
+            - PATCH
+            - DELETE
+          CachedMethods:
+            - GET
+            - HEAD
+          Compress: true
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad  # CachingDisabled - for dynamic content
+          OriginRequestPolicyId: 216adef6-5c7f-47e4-b989-5492eafa07d3  # AllViewer
+          ResponseHeadersPolicyId: !Ref SecurityHeadersPolicy
+
+        # API cache behaviour - Backend (/api/*)
+        CacheBehaviors:
+          - PathPattern: /api/*
+            TargetOriginId: FinpayALBOrigin
+            ViewerProtocolPolicy: https-only
+            AllowedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+              - PUT
+              - POST
+              - PATCH
+              - DELETE
+            CachedMethods:
+              - GET
+              - HEAD
+            Compress: true
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad  # CachingDisabled - APIs must not be cached
+            OriginRequestPolicyId: 216adef6-5c7f-47e4-b989-5492eafa07d3  # AllViewer
+            ResponseHeadersPolicyId: !Ref SecurityHeadersPolicy
+
+        # Custom error pages
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 403
+            ResponsePagePath: /error/403.html
+            ErrorCachingMinTTL: 10
+          - ErrorCode: 404
+            ResponseCode: 404
+            ResponsePagePath: /error/404.html
+            ErrorCachingMinTTL: 10
+          - ErrorCode: 500
+            ResponseCode: 500
+            ResponsePagePath: /error/500.html
+            ErrorCachingMinTTL: 0
+          - ErrorCode: 503
+            ResponseCode: 503
+            ResponsePagePath: /error/503.html
+            ErrorCachingMinTTL: 0
+
+        # Geo restriction - none by default
+        Restrictions:
+          GeoRestriction:
+            RestrictionType: none
+
+      Tags:
+        - Key: Project
+          Value: Finpay
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # ---------------------------------------------------
+  # 4. CloudFront Security Headers Policy
+  # ---------------------------------------------------
+  SecurityHeadersPolicy:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub "finpay-${EnvironmentName}-security-headers"
+        Comment: Security headers for Finpay banking application
+        SecurityHeadersConfig:
+          StrictTransportSecurity:
+            Override: true
+            AccessControlMaxAgeSec: 31536000
+            IncludeSubdomains: true
+            Preload: true
+          ContentTypeOptions:
+            Override: true
+          FrameOptions:
+            Override: true
+            FrameOption: DENY
+          XSSProtection:
+            Override: true
+            Protection: true
+            ModeBlock: true
+          ReferrerPolicy:
+            Override: true
+            ReferrerPolicy: strict-origin-when-cross-origin
+          ContentSecurityPolicy:
+            Override: true
+            ContentSecurityPolicy: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none';"
+
+  # ---------------------------------------------------
+  # 5. CloudWatch Alarms
+  # ---------------------------------------------------
+  WAFBlockedRequestsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "finpay-${EnvironmentName}-waf-high-blocked-requests"
+      AlarmDescription: WAF is blocking an unusually high number of requests
+      Namespace: AWS/WAFV2
+      MetricName: BlockedRequests
+      Dimensions:
+        - Name: WebACL
+          Value: !Ref FinpayWAFWebACL
+        - Name: Region
+          Value: !Ref AWS::Region
+        - Name: Rule
+          Value: ALL
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 500
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  CloudFront4xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "finpay-${EnvironmentName}-cloudfront-high-4xx"
+      AlarmDescription: CloudFront 4XX error rate exceeded 5%
+      Namespace: AWS/CloudFront
+      MetricName: 4xxErrorRate
+      Dimensions:
+        - Name: DistributionId
+          Value: !Ref FinpayCloudFrontDistribution
+        - Name: Region
+          Value: Global
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  CloudFront5xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "finpay-${EnvironmentName}-cloudfront-high-5xx"
+      AlarmDescription: CloudFront 5XX error rate exceeded 1%
+      Namespace: AWS/CloudFront
+      MetricName: 5xxErrorRate
+      Dimensions:
+        - Name: DistributionId
+          Value: !Ref FinpayCloudFrontDistribution
+        - Name: Region
+          Value: Global
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+# -------------------------------------------------------
+# Outputs
+# -------------------------------------------------------
+Outputs:
+  CloudFrontDistributionId:
+    Description: CloudFront distribution ID
+    Value: !Ref FinpayCloudFrontDistribution
+    Export:
+      Name: !Sub "${AWS::StackName}-DistributionId"
+
+  CloudFrontDomainName:
+    Description: CloudFront distribution domain name
+    Value: !GetAtt FinpayCloudFrontDistribution.DomainName
+    Export:
+      Name: !Sub "${AWS::StackName}-DomainName"
+
+  WAFWebACLArn:
+    Description: WAF Web ACL ARN
+    Value: !GetAtt FinpayWAFWebACL.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-WAFWebACLArn"
+
+  WAFWebACLId:
+    Description: WAF Web ACL ID
+    Value: !GetAtt FinpayWAFWebACL.Id
+    Export:
+      Name: !Sub "${AWS::StackName}-WAFWebACLId"
+
+  SecurityHeadersPolicyId:
+    Description: CloudFront security headers response policy ID
+    Value: !Ref SecurityHeadersPolicy
+    Export:
+      Name: !Sub "${AWS::StackName}-SecurityHeadersPolicyId"
