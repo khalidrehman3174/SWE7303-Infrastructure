@@ -7,7 +7,7 @@ Parameters:
     Default: finpay
     Description: Project name used for resource naming
 
-    EnvironmentName:
+  EnvironmentName:          # <-- same level as ProjectName
     Type: String
     Default: production
     AllowedValues: [production, staging, development]
