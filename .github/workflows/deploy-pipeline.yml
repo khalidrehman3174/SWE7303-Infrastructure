@@ -1,0 +1,63 @@
+name: Deploy Finpay Infrastructure Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch: # Allow manual trigger from GitHub Actions UI
+
+env:
+  AWS_REGION: eu-west-2
+  STACK_NAME: finpay-infra-pipeline
+  TEMPLATE_PATH: pipeline/infra-pipeline.yml
+
+jobs:
+  deploy-pipeline:
+    name: Deploy Infrastructure Pipeline to AWS
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── Step 1: Checkout repo ──────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── Step 2: Configure AWS credentials ─────────────
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # ── Step 3: Verify AWS connection ─────────────────
+      - name: Verify AWS connection
+        run: aws sts get-caller-identity
+
+      # ── Step 4: Deploy infra pipeline stack ───────────
+      - name: Deploy infra pipeline CloudFormation stack
+        run: |
+          aws cloudformation deploy \
+            --template-file ${{ env.TEMPLATE_PATH }} \
+            --stack-name ${{ env.STACK_NAME }} \
+            --parameter-overrides \
+              EnvironmentName=production \
+              GitHubOwner=khalidrehman3174 \
+              GitHubRepo=SWE7303-Infrastructure \
+              GitHubBranch=main \
+              CodeStarConnectionArn=arn:aws:codeconnections:eu-west-2:123086253062:connection/0a32a392-0f18-404d-88be-50065557c348 \
+              CloudFormationFolder=cloudformation \
+              VpcStackName=finpay-vpc \
+              ALBStackName=finpay-alb \
+              ECRStackName=finpay-ecr \
+              ECSStackName=finpay-ecs-cluster \
+              RDSStackName=finpay-rds \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --region ${{ env.AWS_REGION }}
+
+      # ── Step 5: Confirm deployment ────────────────────
+      - name: Confirm stack deployment
+        run: |
+          aws cloudformation describe-stacks \
+            --stack-name ${{ env.STACK_NAME }} \
+            --region ${{ env.AWS_REGION }} \
+            --query "Stacks[0].StackStatus"
