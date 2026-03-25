@@ -16,7 +16,8 @@ Parameters:
 
   GitHubOwner:
     Type: String
-    Description: GitHub organisation or username (e.g. khalidrehman3174)
+    Default: khalidrehman3174
+    Description: GitHub organisation or username
 
   GitHubRepo:
     Type: String
@@ -30,9 +31,8 @@ Parameters:
 
   CodeStarConnectionArn:
     Type: String
-    Description: >
-      ARN of the CodeStar connection to GitHub.
-      Create one in AWS Console -> Developer Tools -> Connections.
+    Default: arn:aws:codeconnections:eu-west-2:123086253062:connection/0a32a392-0f18-404d-88be-50065557c348
+    Description: ARN of the CodeStar connection to GitHub
 
   CloudFormationFolder:
     Type: String
@@ -67,8 +67,7 @@ Parameters:
   ArtifactBucketName:
     Type: String
     Default: ""
-    Description: >
-      S3 bucket name for pipeline artifacts. Leave blank to auto-create.
+    Description: S3 bucket name for pipeline artifacts. Leave blank to auto-create.
 
 # -------------------------------------------------------
 # Conditions
@@ -237,9 +236,10 @@ Resources:
                 TemplatePath: !Sub "InfraSource::${CloudFormationFolder}/vpc.yml"
                 Capabilities: CAPABILITY_NAMED_IAM
                 RoleArn: !GetAtt CloudFormationDeployRole.Arn
-                ParameterOverrides: !Sub |
+                ParameterOverrides: |
                   {
-                    "EnvironmentName": "${EnvironmentName}"
+                    "ProjectName": "finpay",
+                    "EnvironmentName": "production"
                   }
               InputArtifacts:
                 - Name: InfraSource
@@ -260,10 +260,10 @@ Resources:
                 TemplatePath: !Sub "InfraSource::${CloudFormationFolder}/alb.yml"
                 Capabilities: CAPABILITY_NAMED_IAM
                 RoleArn: !GetAtt CloudFormationDeployRole.Arn
-                ParameterOverrides: !Sub |
+                ParameterOverrides: |
                   {
-                    "EnvironmentName": "${EnvironmentName}",
-                    "VpcStackName": "${VpcStackName}"
+                    "EnvironmentName": "production",
+                    "VpcStackName": "finpay-vpc"
                   }
               InputArtifacts:
                 - Name: InfraSource
@@ -280,9 +280,9 @@ Resources:
                 TemplatePath: !Sub "InfraSource::${CloudFormationFolder}/ecr.yml"
                 Capabilities: CAPABILITY_NAMED_IAM
                 RoleArn: !GetAtt CloudFormationDeployRole.Arn
-                ParameterOverrides: !Sub |
+                ParameterOverrides: |
                   {
-                    "EnvironmentName": "${EnvironmentName}"
+                    "EnvironmentName": "production"
                   }
               InputArtifacts:
                 - Name: InfraSource
@@ -303,11 +303,11 @@ Resources:
                 TemplatePath: !Sub "InfraSource::${CloudFormationFolder}/ecs-cluster.yml"
                 Capabilities: CAPABILITY_NAMED_IAM
                 RoleArn: !GetAtt CloudFormationDeployRole.Arn
-                ParameterOverrides: !Sub |
+                ParameterOverrides: |
                   {
-                    "EnvironmentName": "${EnvironmentName}",
-                    "VpcStackName": "${VpcStackName}",
-                    "ALBStackName": "${ALBStackName}"
+                    "EnvironmentName": "production",
+                    "VpcStackName": "finpay-vpc",
+                    "ALBStackName": "finpay-alb"
                   }
               InputArtifacts:
                 - Name: InfraSource
@@ -328,11 +328,11 @@ Resources:
                 TemplatePath: !Sub "InfraSource::${CloudFormationFolder}/rds.yml"
                 Capabilities: CAPABILITY_NAMED_IAM
                 RoleArn: !GetAtt CloudFormationDeployRole.Arn
-                ParameterOverrides: !Sub |
+                ParameterOverrides: |
                   {
-                    "EnvironmentName": "${EnvironmentName}",
-                    "VpcStackName": "${VpcStackName}",
-                    "ECSStackName": "${ECSStackName}"
+                    "EnvironmentName": "production",
+                    "VpcStackName": "finpay-vpc",
+                    "ECSStackName": "finpay-ecs-cluster"
                   }
               InputArtifacts:
                 - Name: InfraSource
