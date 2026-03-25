@@ -1,1 +1,761 @@
-# placeholder
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Finpay Technologies - ECS Fargate Cluster Stack
+  Provisions ECS cluster, task definitions, services, ALB, target groups,
+  security groups, IAM roles, and CloudWatch log groups for Frontend and Backend services.
+
+# -------------------------------------------------------
+# Parameters
+# -------------------------------------------------------
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: production
+    AllowedValues: [production, staging, development]
+    Description: Deployment environment name
+
+  VpcStackName:
+    Type: String
+    Default: finpay-vpc
+    Description: Name of the VPC CloudFormation stack (used for Fn::ImportValue)
+
+  FrontendImage:
+    Type: String
+    Description: ECR image URI for the Frontend service (React/PHP)
+    Default: "PLACEHOLDER_FRONTEND_IMAGE"
+
+  BackendImage:
+    Type: String
+    Description: ECR image URI for the Backend API service
+    Default: "PLACEHOLDER_BACKEND_IMAGE"
+
+  FrontendContainerPort:
+    Type: Number
+    Default: 80
+    Description: Port the frontend container listens on
+
+  BackendContainerPort:
+    Type: Number
+    Default: 8080
+    Description: Port the backend container listens on
+
+  FrontendTaskCpu:
+    Type: Number
+    Default: 512
+    AllowedValues: [256, 512, 1024, 2048, 4096]
+    Description: CPU units for the frontend task (1 vCPU = 1024)
+
+  FrontendTaskMemory:
+    Type: Number
+    Default: 1024
+    AllowedValues: [512, 1024, 2048, 4096, 8192]
+    Description: Memory (MB) for the frontend task
+
+  BackendTaskCpu:
+    Type: Number
+    Default: 1024
+    AllowedValues: [256, 512, 1024, 2048, 4096]
+    Description: CPU units for the backend task
+
+  BackendTaskMemory:
+    Type: Number
+    Default: 2048
+    AllowedValues: [512, 1024, 2048, 4096, 8192]
+    Description: Memory (MB) for the backend task
+
+  FrontendDesiredCount:
+    Type: Number
+    Default: 2
+    Description: Desired number of frontend tasks
+
+  BackendDesiredCount:
+    Type: Number
+    Default: 2
+    Description: Desired number of backend tasks
+
+  CertificateArn:
+    Type: String
+    Default: ""
+    Description: >
+      ARN of the ACM certificate for HTTPS on the ALB listener.
+      Leave blank to use HTTP only (not recommended for production).
+
+# -------------------------------------------------------
+# Conditions
+# -------------------------------------------------------
+Conditions:
+  HasCertificate: !Not [!Equals [!Ref CertificateArn, ""]]
+  IsProduction: !Equals [!Ref EnvironmentName, "production"]
+
+# -------------------------------------------------------
+# Resources
+# -------------------------------------------------------
+Resources:
+
+  # ---------------------------------------------------
+  # 1. ECS Cluster
+  # ---------------------------------------------------
+  FinpayECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub "finpay-${EnvironmentName}-cluster"
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+      CapacityProviders:
+        - FARGATE
+        - FARGATE_SPOT
+      DefaultCapacityProviderStrategy:
+        - CapacityProvider: FARGATE
+          Weight: 1
+          Base: 1
+        - CapacityProvider: FARGATE_SPOT
+          Weight: 1
+      Tags:
+        - Key: Project
+          Value: Finpay
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  # ---------------------------------------------------
+  # 2. CloudWatch Log Groups
+  # ---------------------------------------------------
+  FrontendLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/ecs/finpay-${EnvironmentName}/frontend"
+      RetentionInDays: 30
+
+  BackendLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/ecs/finpay-${EnvironmentName}/backend"
+      RetentionInDays: 30
+
+  # ---------------------------------------------------
+  # 3. IAM Roles
+  # ---------------------------------------------------
+
+  # Task Execution Role - used by ECS agent to pull images, write logs
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "finpay-${EnvironmentName}-ecs-execution-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: SecretsManagerAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - kms:Decrypt
+                Resource: "*"
+      Tags:
+        - Key: Project
+          Value: Finpay
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # Task Role - permissions the running container itself uses at runtime
+  ECSTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "finpay-${EnvironmentName}-ecs-task-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: FinpayTaskPermissions
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: !Sub "arn:aws:s3:::finpay-${EnvironmentName}-*/*"
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:finpay/${EnvironmentName}/*"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+      Tags:
+        - Key: Project
+          Value: Finpay
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # ---------------------------------------------------
+  # 4. Security Groups
+  # ---------------------------------------------------
+
+  # ALB Security Group - public-facing, allows HTTP/HTTPS
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Finpay Application Load Balancer
+      VpcId: !ImportValue
+        Fn::Sub: "${VpcStackName}-VpcId"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: "0.0.0.0/0"
+          Description: Allow HTTP from anywhere
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: "0.0.0.0/0"
+          Description: Allow HTTPS from anywhere
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: "0.0.0.0/0"
+          Description: Allow all outbound
+      Tags:
+        - Key: Name
+          Value: !Sub "finpay-${EnvironmentName}-alb-sg"
+        - Key: Project
+          Value: Finpay
+
+  # Frontend Service Security Group - only accepts traffic from ALB
+  FrontendSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Finpay Frontend ECS tasks
+      VpcId: !ImportValue
+        Fn::Sub: "${VpcStackName}-VpcId"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref FrontendContainerPort
+          ToPort: !Ref FrontendContainerPort
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+          Description: Allow traffic from ALB only
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: "0.0.0.0/0"
+          Description: Allow all outbound (ECR, Secrets Manager, RDS)
+      Tags:
+        - Key: Name
+          Value: !Sub "finpay-${EnvironmentName}-frontend-sg"
+        - Key: Project
+          Value: Finpay
+
+  # Backend Service Security Group - accepts from ALB and Frontend
+  BackendSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Finpay Backend ECS tasks
+      VpcId: !ImportValue
+        Fn::Sub: "${VpcStackName}-VpcId"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref BackendContainerPort
+          ToPort: !Ref BackendContainerPort
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+          Description: Allow traffic from ALB
+        - IpProtocol: tcp
+          FromPort: !Ref BackendContainerPort
+          ToPort: !Ref BackendContainerPort
+          SourceSecurityGroupId: !Ref FrontendSecurityGroup
+          Description: Allow traffic from Frontend tasks
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: "0.0.0.0/0"
+          Description: Allow all outbound (RDS, ElastiCache, Secrets Manager)
+      Tags:
+        - Key: Name
+          Value: !Sub "finpay-${EnvironmentName}-backend-sg"
+        - Key: Project
+          Value: Finpay
+
+  # ---------------------------------------------------
+  # 5. Application Load Balancer
+  # ---------------------------------------------------
+  FinpayALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "finpay-${EnvironmentName}-alb"
+      Scheme: internet-facing
+      Type: application
+      Subnets:
+        - !ImportValue
+          Fn::Sub: "${VpcStackName}-PublicSubnet1Id"
+        - !ImportValue
+          Fn::Sub: "${VpcStackName}-PublicSubnet2Id"
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: "60"
+        - Key: deletion_protection.enabled
+          Value: !If [IsProduction, "true", "false"]
+        - Key: access_logs.s3.enabled
+          Value: "false"
+      Tags:
+        - Key: Project
+          Value: Finpay
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # ---------------------------------------------------
+  # 6. Target Groups
+  # ---------------------------------------------------
+  FrontendTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "finpay-${EnvironmentName}-frontend-tg"
+      Port: !Ref FrontendContainerPort
+      Protocol: HTTP
+      TargetType: ip
+      VpcId: !ImportValue
+        Fn::Sub: "${VpcStackName}-VpcId"
+      HealthCheckEnabled: true
+      HealthCheckPath: /health
+      HealthCheckProtocol: HTTP
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: "200"
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: "30"
+        - Key: stickiness.enabled
+          Value: "false"
+      Tags:
+        - Key: Project
+          Value: Finpay
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  BackendTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "finpay-${EnvironmentName}-backend-tg"
+      Port: !Ref BackendContainerPort
+      Protocol: HTTP
+      TargetType: ip
+      VpcId: !ImportValue
+        Fn::Sub: "${VpcStackName}-VpcId"
+      HealthCheckEnabled: true
+      HealthCheckPath: /api/health
+      HealthCheckProtocol: HTTP
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: "200"
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: "30"
+      Tags:
+        - Key: Project
+          Value: Finpay
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # ---------------------------------------------------
+  # 7. ALB Listeners
+  # ---------------------------------------------------
+
+  # HTTP Listener - redirects to HTTPS if cert provided, otherwise serves directly
+  HTTPListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref FinpayALB
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - !If
+          - HasCertificate
+          - Type: redirect
+            RedirectConfig:
+              Protocol: HTTPS
+              Port: "443"
+              StatusCode: HTTP_301
+          - Type: forward
+            TargetGroupArn: !Ref FrontendTargetGroup
+
+  # HTTPS Listener (only created when certificate ARN provided)
+  HTTPSListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: HasCertificate
+    Properties:
+      LoadBalancerArn: !Ref FinpayALB
+      Port: 443
+      Protocol: HTTPS
+      SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
+      Certificates:
+        - CertificateArn: !Ref CertificateArn
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref FrontendTargetGroup
+
+  # Route /api/* traffic to the Backend target group
+  BackendListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !If [HasCertificate, !Ref HTTPSListener, !Ref HTTPListener]
+      Priority: 10
+      Conditions:
+        - Field: path-pattern
+          PathPatternConfig:
+            Values:
+              - /api/*
+              - /api
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref BackendTargetGroup
+
+  # ---------------------------------------------------
+  # 8. Task Definitions
+  # ---------------------------------------------------
+  FrontendTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub "finpay-${EnvironmentName}-frontend"
+      Cpu: !Ref FrontendTaskCpu
+      Memory: !Ref FrontendTaskMemory
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt ECSTaskRole.Arn
+      RuntimePlatform:
+        CpuArchitecture: X86_64
+        OperatingSystemFamily: LINUX
+      ContainerDefinitions:
+        - Name: frontend
+          Image: !Ref FrontendImage
+          Essential: true
+          PortMappings:
+            - ContainerPort: !Ref FrontendContainerPort
+              Protocol: tcp
+          Environment:
+            - Name: NODE_ENV
+              Value: !Ref EnvironmentName
+            - Name: REACT_APP_API_URL
+              Value: !Sub "https://${FinpayALB.DNSName}/api"
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref FrontendLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: frontend
+          HealthCheck:
+            Command:
+              - CMD-SHELL
+              - !Sub "curl -f http://localhost:${FrontendContainerPort}/health || exit 1"
+            Interval: 30
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 60
+      Tags:
+        - Key: Project
+          Value: Finpay
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  BackendTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub "finpay-${EnvironmentName}-backend"
+      Cpu: !Ref BackendTaskCpu
+      Memory: !Ref BackendTaskMemory
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt ECSTaskRole.Arn
+      RuntimePlatform:
+        CpuArchitecture: X86_64
+        OperatingSystemFamily: LINUX
+      ContainerDefinitions:
+        - Name: backend
+          Image: !Ref BackendImage
+          Essential: true
+          PortMappings:
+            - ContainerPort: !Ref BackendContainerPort
+              Protocol: tcp
+          Secrets:
+            - Name: DB_PASSWORD
+              ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:finpay/${EnvironmentName}/db-password"
+            - Name: JWT_SECRET
+              ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:finpay/${EnvironmentName}/jwt-secret"
+          Environment:
+            - Name: APP_ENV
+              Value: !Ref EnvironmentName
+            - Name: PORT
+              Value: !Sub "${BackendContainerPort}"
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref BackendLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: backend
+          HealthCheck:
+            Command:
+              - CMD-SHELL
+              - !Sub "curl -f http://localhost:${BackendContainerPort}/api/health || exit 1"
+            Interval: 30
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 60
+      Tags:
+        - Key: Project
+          Value: Finpay
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # ---------------------------------------------------
+  # 9. ECS Services
+  # ---------------------------------------------------
+  FrontendService:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - HTTPListener
+    Properties:
+      ServiceName: !Sub "finpay-${EnvironmentName}-frontend"
+      Cluster: !Ref FinpayECSCluster
+      TaskDefinition: !Ref FrontendTaskDefinition
+      DesiredCount: !Ref FrontendDesiredCount
+      LaunchType: FARGATE
+      PlatformVersion: LATEST
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets:
+            - !ImportValue
+              Fn::Sub: "${VpcStackName}-PrivateSubnet1Id"
+            - !ImportValue
+              Fn::Sub: "${VpcStackName}-PrivateSubnet2Id"
+          SecurityGroups:
+            - !Ref FrontendSecurityGroup
+      LoadBalancers:
+        - ContainerName: frontend
+          ContainerPort: !Ref FrontendContainerPort
+          TargetGroupArn: !Ref FrontendTargetGroup
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 50
+        MaximumPercent: 200
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+      HealthCheckGracePeriodSeconds: 60
+      EnableECSManagedTags: true
+      PropagateTags: SERVICE
+      Tags:
+        - Key: Project
+          Value: Finpay
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  BackendService:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - HTTPListener
+      - BackendListenerRule
+    Properties:
+      ServiceName: !Sub "finpay-${EnvironmentName}-backend"
+      Cluster: !Ref FinpayECSCluster
+      TaskDefinition: !Ref BackendTaskDefinition
+      DesiredCount: !Ref BackendDesiredCount
+      LaunchType: FARGATE
+      PlatformVersion: LATEST
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets:
+            - !ImportValue
+              Fn::Sub: "${VpcStackName}-PrivateSubnet1Id"
+            - !ImportValue
+              Fn::Sub: "${VpcStackName}-PrivateSubnet2Id"
+          SecurityGroups:
+            - !Ref BackendSecurityGroup
+      LoadBalancers:
+        - ContainerName: backend
+          ContainerPort: !Ref BackendContainerPort
+          TargetGroupArn: !Ref BackendTargetGroup
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 50
+        MaximumPercent: 200
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+      HealthCheckGracePeriodSeconds: 60
+      EnableECSManagedTags: true
+      PropagateTags: SERVICE
+      Tags:
+        - Key: Project
+          Value: Finpay
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # ---------------------------------------------------
+  # 10. Auto Scaling
+  # ---------------------------------------------------
+  AutoScalingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "finpay-${EnvironmentName}-autoscaling-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: application-autoscaling.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceAutoscaleRole
+
+  # Frontend Auto Scaling
+  FrontendScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MaxCapacity: 6
+      MinCapacity: 2
+      ResourceId: !Sub "service/${FinpayECSCluster}/${FrontendService.Name}"
+      RoleARN: !GetAtt AutoScalingRole.Arn
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+
+  FrontendScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub "finpay-${EnvironmentName}-frontend-cpu-scaling"
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref FrontendScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        TargetValue: 70.0
+        ScaleInCooldown: 300
+        ScaleOutCooldown: 60
+
+  # Backend Auto Scaling
+  BackendScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MaxCapacity: 8
+      MinCapacity: 2
+      ResourceId: !Sub "service/${FinpayECSCluster}/${BackendService.Name}"
+      RoleARN: !GetAtt AutoScalingRole.Arn
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+
+  BackendScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub "finpay-${EnvironmentName}-backend-cpu-scaling"
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref BackendScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        TargetValue: 70.0
+        ScaleInCooldown: 300
+        ScaleOutCooldown: 60
+
+# -------------------------------------------------------
+# Outputs
+# -------------------------------------------------------
+Outputs:
+  ClusterName:
+    Description: ECS Cluster name
+    Value: !Ref FinpayECSCluster
+    Export:
+      Name: !Sub "${AWS::StackName}-ClusterName"
+
+  ClusterArn:
+    Description: ECS Cluster ARN
+    Value: !GetAtt FinpayECSCluster.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-ClusterArn"
+
+  ALBDNSName:
+    Description: Application Load Balancer DNS name
+    Value: !GetAtt FinpayALB.DNSName
+    Export:
+      Name: !Sub "${AWS::StackName}-ALBDNSName"
+
+  ALBArn:
+    Description: ALB ARN (used by CodeDeploy / blue-green)
+    Value: !Ref FinpayALB
+    Export:
+      Name: !Sub "${AWS::StackName}-ALBArn"
+
+  ALBSecurityGroupId:
+    Description: ALB Security Group ID
+    Value: !Ref ALBSecurityGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-ALBSecurityGroupId"
+
+  FrontendSecurityGroupId:
+    Description: Frontend ECS tasks Security Group ID
+    Value: !Ref FrontendSecurityGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-FrontendSecurityGroupId"
+
+  BackendSecurityGroupId:
+    Description: Backend ECS tasks Security Group ID
+    Value: !Ref BackendSecurityGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-BackendSecurityGroupId"
+
+  FrontendTargetGroupArn:
+    Description: Frontend Target Group ARN
+    Value: !Ref FrontendTargetGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-FrontendTargetGroupArn"
+
+  BackendTargetGroupArn:
+    Description: Backend Target Group ARN
+    Value: !Ref BackendTargetGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-BackendTargetGroupArn"
+
+  ECSTaskExecutionRoleArn:
+    Description: ECS Task Execution Role ARN
+    Value: !GetAtt ECSTaskExecutionRole.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-ECSTaskExecutionRoleArn"
+
+  ECSTaskRoleArn:
+    Description: ECS Task Role ARN
+    Value: !GetAtt ECSTaskRole.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-ECSTaskRoleArn"
+
+  FrontendServiceName:
+    Description: Frontend ECS Service name
+    Value: !GetAtt FrontendService.Name
+    Export:
+      Name: !Sub "${AWS::StackName}-FrontendServiceName"
+
+  BackendServiceName:
+    Description: Backend ECS Service name
+    Value: !GetAtt BackendService.Name
+    Export:
+      Name: !Sub "${AWS::StackName}-BackendServiceName"
