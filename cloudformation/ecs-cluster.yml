@@ -329,9 +329,9 @@ Resources:
               Protocol: tcp
           Secrets:
             - Name: DB_PASSWORD
-              ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:finpay/${EnvironmentName}/db-password"
+              ValueFrom: "arn:aws:secretsmanager:eu-west-2:123086253062:secret:finpay/production/db-password-IRj6MY"
             - Name: JWT_SECRET
-              ValueFrom: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:finpay/${EnvironmentName}/jwt-secret"
+              ValueFrom: "arn:aws:secretsmanager:eu-west-2:123086253062:secret:finpay/production/jwt-secret-kBdjfV"
           Environment:
             - Name: APP_ENV
               Value: !Ref EnvironmentName
