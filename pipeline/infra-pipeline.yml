@@ -1,1 +1,367 @@
-# placeholder
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Finpay Technologies - Infrastructure Pipeline
+  CodePipeline to deploy CloudFormation stacks in the correct dependency order:
+  VPC -> ALB -> ECR -> ECS Cluster -> RDS
+
+# -------------------------------------------------------
+# Parameters
+# -------------------------------------------------------
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: production
+    AllowedValues: [production, staging, development]
+    Description: Deployment environment name
+
+  GitHubOwner:
+    Type: String
+    Description: GitHub organisation or username (e.g. khalidrehman3174)
+
+  GitHubRepo:
+    Type: String
+    Default: SWE7303-Infrastructure
+    Description: GitHub repository name for the infrastructure code
+
+  GitHubBranch:
+    Type: String
+    Default: main
+    Description: GitHub branch to trigger the pipeline from
+
+  CodeStarConnectionArn:
+    Type: String
+    Description: >
+      ARN of the CodeStar connection to GitHub.
+      Create one in AWS Console -> Developer Tools -> Connections.
+
+  CloudFormationFolder:
+    Type: String
+    Default: cloudformation
+    Description: Folder in the repo containing the CloudFormation templates
+
+  VpcStackName:
+    Type: String
+    Default: finpay-vpc
+    Description: CloudFormation stack name for the VPC stack
+
+  ALBStackName:
+    Type: String
+    Default: finpay-alb
+    Description: CloudFormation stack name for the ALB stack
+
+  ECRStackName:
+    Type: String
+    Default: finpay-ecr
+    Description: CloudFormation stack name for the ECR stack
+
+  ECSStackName:
+    Type: String
+    Default: finpay-ecs-cluster
+    Description: CloudFormation stack name for the ECS cluster stack
+
+  RDSStackName:
+    Type: String
+    Default: finpay-rds
+    Description: CloudFormation stack name for the RDS stack
+
+  ArtifactBucketName:
+    Type: String
+    Default: ""
+    Description: >
+      S3 bucket name for pipeline artifacts. Leave blank to auto-create.
+
+# -------------------------------------------------------
+# Conditions
+# -------------------------------------------------------
+Conditions:
+  CreateArtifactBucket: !Equals [!Ref ArtifactBucketName, ""]
+
+# -------------------------------------------------------
+# Resources
+# -------------------------------------------------------
+Resources:
+
+  # ---------------------------------------------------
+  # 1. S3 Artifact Bucket
+  # ---------------------------------------------------
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    Condition: CreateArtifactBucket
+    DeletionPolicy: Retain
+    Properties:
+      BucketName: !Sub "finpay-${EnvironmentName}-infra-pipeline-artifacts-${AWS::AccountId}"
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Project
+          Value: Finpay
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # ---------------------------------------------------
+  # 2. IAM Role for CodePipeline
+  # ---------------------------------------------------
+  InfraPipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "finpay-${EnvironmentName}-infra-pipeline-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: InfraPipelinePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:GetBucketVersioning
+                Resource:
+                  - !If
+                    - CreateArtifactBucket
+                    - !GetAtt ArtifactBucket.Arn
+                    - !Sub "arn:aws:s3:::${ArtifactBucketName}"
+                  - !If
+                    - CreateArtifactBucket
+                    - !Sub "${ArtifactBucket.Arn}/*"
+                    - !Sub "arn:aws:s3:::${ArtifactBucketName}/*"
+              - Effect: Allow
+                Action:
+                  - cloudformation:CreateStack
+                  - cloudformation:UpdateStack
+                  - cloudformation:DescribeStacks
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:GetTemplateSummary
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource: !GetAtt CloudFormationDeployRole.Arn
+              - Effect: Allow
+                Action:
+                  - codestar-connections:UseConnection
+                Resource: !Ref CodeStarConnectionArn
+      Tags:
+        - Key: Project
+          Value: Finpay
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # ---------------------------------------------------
+  # 3. IAM Role for CloudFormation Deploy
+  # ---------------------------------------------------
+  CloudFormationDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "finpay-${EnvironmentName}-cfn-deploy-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudformation.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AdministratorAccess
+      Tags:
+        - Key: Project
+          Value: Finpay
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # ---------------------------------------------------
+  # 4. Infrastructure Pipeline
+  # ---------------------------------------------------
+  InfraPipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Sub "finpay-${EnvironmentName}-infra-pipeline"
+      RoleArn: !GetAtt InfraPipelineRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !If
+          - CreateArtifactBucket
+          - !Ref ArtifactBucket
+          - !Ref ArtifactBucketName
+      Stages:
+
+        # ── Stage 1: Source ──────────────────────────────
+        - Name: Source
+          Actions:
+            - Name: InfraSource
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeStarSourceConnection
+                Version: "1"
+              Configuration:
+                ConnectionArn: !Ref CodeStarConnectionArn
+                FullRepositoryId: !Sub "${GitHubOwner}/${GitHubRepo}"
+                BranchName: !Ref GitHubBranch
+                OutputArtifactFormat: CODE_ZIP
+                DetectChanges: true
+              OutputArtifacts:
+                - Name: InfraSource
+              RunOrder: 1
+
+        # ── Stage 2: Deploy VPC ──────────────────────────
+        - Name: Deploy-VPC
+          Actions:
+            - Name: DeployVPC
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: "1"
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                StackName: !Ref VpcStackName
+                TemplatePath: !Sub "InfraSource::${CloudFormationFolder}/vpc.yml"
+                Capabilities: CAPABILITY_NAMED_IAM
+                RoleArn: !GetAtt CloudFormationDeployRole.Arn
+                ParameterOverrides: !Sub |
+                  {
+                    "EnvironmentName": "${EnvironmentName}"
+                  }
+              InputArtifacts:
+                - Name: InfraSource
+              RunOrder: 1
+
+        # ── Stage 3: Deploy ALB + ECR (parallel) ─────────
+        - Name: Deploy-ALB-ECR
+          Actions:
+            - Name: DeployALB
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: "1"
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                StackName: !Ref ALBStackName
+                TemplatePath: !Sub "InfraSource::${CloudFormationFolder}/alb.yml"
+                Capabilities: CAPABILITY_NAMED_IAM
+                RoleArn: !GetAtt CloudFormationDeployRole.Arn
+                ParameterOverrides: !Sub |
+                  {
+                    "EnvironmentName": "${EnvironmentName}",
+                    "VpcStackName": "${VpcStackName}"
+                  }
+              InputArtifacts:
+                - Name: InfraSource
+              RunOrder: 1
+            - Name: DeployECR
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: "1"
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                StackName: !Ref ECRStackName
+                TemplatePath: !Sub "InfraSource::${CloudFormationFolder}/ecr.yml"
+                Capabilities: CAPABILITY_NAMED_IAM
+                RoleArn: !GetAtt CloudFormationDeployRole.Arn
+                ParameterOverrides: !Sub |
+                  {
+                    "EnvironmentName": "${EnvironmentName}"
+                  }
+              InputArtifacts:
+                - Name: InfraSource
+              RunOrder: 1
+
+        # ── Stage 4: Deploy ECS Cluster ──────────────────
+        - Name: Deploy-ECS-Cluster
+          Actions:
+            - Name: DeployECSCluster
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: "1"
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                StackName: !Ref ECSStackName
+                TemplatePath: !Sub "InfraSource::${CloudFormationFolder}/ecs-cluster.yml"
+                Capabilities: CAPABILITY_NAMED_IAM
+                RoleArn: !GetAtt CloudFormationDeployRole.Arn
+                ParameterOverrides: !Sub |
+                  {
+                    "EnvironmentName": "${EnvironmentName}",
+                    "VpcStackName": "${VpcStackName}",
+                    "ALBStackName": "${ALBStackName}"
+                  }
+              InputArtifacts:
+                - Name: InfraSource
+              RunOrder: 1
+
+        # ── Stage 5: Deploy RDS ──────────────────────────
+        - Name: Deploy-RDS
+          Actions:
+            - Name: DeployRDS
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: "1"
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                StackName: !Ref RDSStackName
+                TemplatePath: !Sub "InfraSource::${CloudFormationFolder}/rds.yml"
+                Capabilities: CAPABILITY_NAMED_IAM
+                RoleArn: !GetAtt CloudFormationDeployRole.Arn
+                ParameterOverrides: !Sub |
+                  {
+                    "EnvironmentName": "${EnvironmentName}",
+                    "VpcStackName": "${VpcStackName}",
+                    "ECSStackName": "${ECSStackName}"
+                  }
+              InputArtifacts:
+                - Name: InfraSource
+              RunOrder: 1
+
+      Tags:
+        - Key: Project
+          Value: Finpay
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+# -------------------------------------------------------
+# Outputs
+# -------------------------------------------------------
+Outputs:
+  InfraPipelineName:
+    Description: Infrastructure pipeline name
+    Value: !Ref InfraPipeline
+    Export:
+      Name: !Sub "${AWS::StackName}-InfraPipelineName"
+
+  ArtifactBucketName:
+    Description: Pipeline artifact S3 bucket name
+    Value: !If [CreateArtifactBucket, !Ref ArtifactBucket, !Ref ArtifactBucketName]
+    Export:
+      Name: !Sub "${AWS::StackName}-ArtifactBucketName"
+
+  CloudFormationDeployRoleArn:
+    Description: CloudFormation deploy role ARN
+    Value: !GetAtt CloudFormationDeployRole.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-CloudFormationDeployRoleArn"
