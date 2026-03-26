@@ -27,12 +27,12 @@ Parameters:
 
   FrontendImage:
     Type: String
-    Default: "nginx:latest"
+    Default: "public.ecr.aws/nginx/nginx:latest"
     Description: ECR image URI for the Frontend service (React/PHP)
 
   BackendImage:
     Type: String
-    Default: "nginx:latest"
+    Default: "public.ecr.aws/nginx/nginx:latest"
     Description: ECR image URI for the Backend API service
 
   FrontendContainerPort:
