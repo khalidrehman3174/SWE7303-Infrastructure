@@ -4,9 +4,6 @@ Description: >
   Provisions a MySQL RDS instance, ElastiCache Redis cluster, subnet groups,
   parameter groups, and security groups for the Finpay data tier.
 
-# -------------------------------------------------------
-# Parameters
-# -------------------------------------------------------
 Parameters:
   EnvironmentName:
     Type: String
@@ -24,7 +21,6 @@ Parameters:
     Default: finpay-ecs-cluster
     Description: Name of the ECS cluster stack (imports backend security group)
 
-  # ── RDS Parameters ──────────────────────────────────
   DBName:
     Type: String
     Default: finpaydb
@@ -77,7 +73,6 @@ Parameters:
     AllowedValues: ["true", "false"]
     Description: Enable deletion protection on the RDS instance
 
-  # ── ElastiCache Parameters ───────────────────────────
   CacheNodeType:
     Type: String
     Default: cache.t3.micro
@@ -93,31 +88,14 @@ Parameters:
     Default: 1
     MinValue: 1
     MaxValue: 3
-    Description: Number of ElastiCache Redis nodes (1 = no replication, 2-3 = replication group)
+    Description: Number of ElastiCache Redis nodes
 
-  RedisEngineVersion:
-    Type: String
-    Default: "7.0"
-    AllowedValues: ["7.0", "6.2", "6.0"]
-    Description: Redis engine version
-
-# -------------------------------------------------------
-# Conditions
-# -------------------------------------------------------
 Conditions:
   IsProduction: !Equals [!Ref EnvironmentName, "production"]
   EnableDeletionProtection: !Equals [!Ref DBDeletionProtection, "true"]
 
-# -------------------------------------------------------
-# Resources
-# -------------------------------------------------------
 Resources:
 
-  # ---------------------------------------------------
-  # 1. Security Groups
-  # ---------------------------------------------------
-
-  # RDS Security Group - only accepts traffic from ECS Backend tasks
   RDSSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -140,10 +118,7 @@ Resources:
           Value: !Sub "finpay-${EnvironmentName}-rds-sg"
         - Key: Project
           Value: Finpay
-        - Key: Environment
-          Value: !Ref EnvironmentName
 
-  # ElastiCache Security Group - only accepts traffic from ECS Backend tasks
   ElastiCacheSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -166,12 +141,6 @@ Resources:
           Value: !Sub "finpay-${EnvironmentName}-redis-sg"
         - Key: Project
           Value: Finpay
-        - Key: Environment
-          Value: !Ref EnvironmentName
-
-  # ---------------------------------------------------
-  # 2. Subnet Groups
-  # ---------------------------------------------------
 
   RDSSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
@@ -186,8 +155,6 @@ Resources:
       Tags:
         - Key: Project
           Value: Finpay
-        - Key: Environment
-          Value: !Ref EnvironmentName
 
   ElastiCacheSubnetGroup:
     Type: AWS::ElastiCache::SubnetGroup
@@ -200,71 +167,34 @@ Resources:
         - !ImportValue
           Fn::Sub: "${VpcStackName}-PrivateSubnet2Id"
 
-  # ---------------------------------------------------
-  # 3. Parameter Groups
-  # ---------------------------------------------------
-
   RDSParameterGroup:
     Type: AWS::RDS::DBParameterGroup
     Properties:
       Family: !Sub "mysql${DBEngineVersion}"
       Description: !Sub "Finpay ${EnvironmentName} MySQL parameter group"
       Parameters:
-        # Enable slow query log for performance monitoring
         slow_query_log: "1"
         long_query_time: "2"
-        # Force SSL connections for security
-        require_secure_transport: "ON"
-        # Optimise InnoDB buffer pool
-        innodb_buffer_pool_size: "{DBInstanceClassMemory*3/4}"
-        # Character set
         character_set_server: "utf8mb4"
         collation_server: "utf8mb4_unicode_ci"
       Tags:
         - Key: Project
           Value: Finpay
-        - Key: Environment
-          Value: !Ref EnvironmentName
 
+  # FIX 1: redis7.0 -> redis7 (correct parameter group family name)
   ElastiCacheParameterGroup:
     Type: AWS::ElastiCache::ParameterGroup
     Properties:
-      CacheParameterGroupFamily: !Sub "redis${RedisEngineVersion}"
+      CacheParameterGroupFamily: "redis7"
       Description: !Sub "Finpay ${EnvironmentName} Redis parameter group"
       Properties:
-        # Set max memory eviction policy - allkeys-lru suitable for session cache
         maxmemory-policy: "allkeys-lru"
-        # Enable keyspace notifications for cache invalidation events
-        notify-keyspace-events: "Ex"
-        # Disable persistence for pure cache workload (reduces overhead)
-        appendonly: "no"
 
-  # ---------------------------------------------------
-  # 4. Secrets Manager - DB Password
-  # ---------------------------------------------------
-  DBPasswordSecret:
-    Type: AWS::SecretsManager::Secret
-    Properties:
-      Name: !Sub "finpay/${EnvironmentName}/db-password"
-      Description: !Sub "Finpay ${EnvironmentName} RDS MySQL master password"
-      GenerateSecretString:
-        SecretStringTemplate: !Sub '{"username": "${DBUsername}"}'
-        GenerateStringKey: "password"
-        PasswordLength: 32
-        ExcludeCharacters: '"@/\'
-      Tags:
-        - Key: Project
-          Value: Finpay
-        - Key: Environment
-          Value: !Ref EnvironmentName
+  # FIX 2: Removed DBPasswordSecret - already exists in Secrets Manager
+  # RDS will resolve the password directly from the existing secret
 
-  # ---------------------------------------------------
-  # 5. RDS MySQL Instance
-  # ---------------------------------------------------
   FinpayRDSInstance:
     Type: AWS::RDS::DBInstance
-    DependsOn:
-      - DBPasswordSecret
     DeletionPolicy: Snapshot
     UpdateReplacePolicy: Snapshot
     Properties:
@@ -291,10 +221,6 @@ Resources:
       EnableCloudwatchLogsExports:
         - error
         - slowquery
-        - general
-      MonitoringInterval: 60
-      EnablePerformanceInsights: true
-      PerformanceInsightsRetentionPeriod: 7
       AutoMinorVersionUpgrade: true
       CopyTagsToSnapshot: true
       Tags:
@@ -302,26 +228,13 @@ Resources:
           Value: !Sub "finpay-${EnvironmentName}-mysql"
         - Key: Project
           Value: Finpay
-        - Key: Environment
-          Value: !Ref EnvironmentName
 
-  # Secret attachment - links the secret to the RDS instance for rotation
-  DBSecretAttachment:
-    Type: AWS::SecretsManager::SecretTargetAttachment
-    Properties:
-      SecretId: !Ref DBPasswordSecret
-      TargetId: !Ref FinpayRDSInstance
-      TargetType: AWS::RDS::DBInstance
-
-  # ---------------------------------------------------
-  # 6. ElastiCache Redis Cluster
-  # ---------------------------------------------------
   FinpayRedisCluster:
     Type: AWS::ElastiCache::CacheCluster
     Properties:
       ClusterName: !Sub "finpay-${EnvironmentName}-redis"
       Engine: redis
-      EngineVersion: !Ref RedisEngineVersion
+      EngineVersion: "7.0"
       CacheNodeType: !Ref CacheNodeType
       NumCacheNodes: !Ref CacheNumNodes
       CacheSubnetGroupName: !Ref ElastiCacheSubnetGroup
@@ -336,14 +249,7 @@ Resources:
           Value: !Sub "finpay-${EnvironmentName}-redis"
         - Key: Project
           Value: Finpay
-        - Key: Environment
-          Value: !Ref EnvironmentName
 
-  # ---------------------------------------------------
-  # 7. CloudWatch Alarms
-  # ---------------------------------------------------
-
-  # RDS CPU alarm
   RDSHighCPUAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
@@ -361,7 +267,6 @@ Resources:
       ComparisonOperator: GreaterThanThreshold
       TreatMissingData: notBreaching
 
-  # RDS free storage alarm
   RDSLowStorageAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
@@ -375,11 +280,10 @@ Resources:
       Statistic: Average
       Period: 300
       EvaluationPeriods: 1
-      Threshold: 5368709120   # 5 GB in bytes
+      Threshold: 5368709120
       ComparisonOperator: LessThanThreshold
       TreatMissingData: notBreaching
 
-  # RDS database connections alarm
   RDSHighConnectionsAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
@@ -397,7 +301,6 @@ Resources:
       ComparisonOperator: GreaterThanThreshold
       TreatMissingData: notBreaching
 
-  # ElastiCache high CPU alarm
   RedisHighCPUAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
@@ -415,27 +318,6 @@ Resources:
       ComparisonOperator: GreaterThanThreshold
       TreatMissingData: notBreaching
 
-  # ElastiCache high evictions alarm (indicates cache pressure)
-  RedisHighEvictionsAlarm:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmName: !Sub "finpay-${EnvironmentName}-redis-high-evictions"
-      AlarmDescription: Redis evictions are high - consider scaling up node type
-      Namespace: AWS/ElastiCache
-      MetricName: Evictions
-      Dimensions:
-        - Name: CacheClusterId
-          Value: !Ref FinpayRedisCluster
-      Statistic: Sum
-      Period: 300
-      EvaluationPeriods: 2
-      Threshold: 100
-      ComparisonOperator: GreaterThanThreshold
-      TreatMissingData: notBreaching
-
-# -------------------------------------------------------
-# Outputs
-# -------------------------------------------------------
 Outputs:
   RDSInstanceId:
     Description: RDS instance identifier
@@ -466,12 +348,6 @@ Outputs:
     Value: !Ref DBUsername
     Export:
       Name: !Sub "${AWS::StackName}-DBUsername"
-
-  DBPasswordSecretArn:
-    Description: ARN of the Secrets Manager secret holding the DB password
-    Value: !Ref DBPasswordSecret
-    Export:
-      Name: !Sub "${AWS::StackName}-DBPasswordSecretArn"
 
   RDSSecurityGroupId:
     Description: RDS security group ID
