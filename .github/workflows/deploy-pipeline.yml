@@ -36,25 +36,39 @@ jobs:
       # ── Step 4: Deploy infra pipeline stack ───────────
       - name: Deploy infra pipeline CloudFormation stack
         run: |
-          aws cloudformation deploy \
-            --template-file ${{ env.TEMPLATE_PATH }} \
+          # Check current stack status before attempting deployment
+          STACK_STATUS=$(aws cloudformation describe-stacks \
             --stack-name ${{ env.STACK_NAME }} \
-            --parameter-overrides \
-              EnvironmentName=production \
-              GitHubOwner=khalidrehman3174 \
-              GitHubRepo=SWE7303-Infrastructure \
-              GitHubBranch=main \
-              CodeStarConnectionArn=arn:aws:codeconnections:eu-west-2:123086253062:connection/0a32a392-0f18-404d-88be-50065557c348 \
-              CloudFormationFolder=cloudformation \
-              VpcStackName=finpay-vpc \
-              ALBStackName=finpay-alb \
-              ECRStackName=finpay-ecr \
-              ECSStackName=finpay-ecs-cluster \
-              RDSStackName=finpay-rds \
-              ArtifactBucketName=finpay-production-infra-pipeline-artifacts-123086253062 \
-            --capabilities CAPABILITY_NAMED_IAM \
-            --no-fail-on-empty-changeset \
-            --region ${{ env.AWS_REGION }}
+            --region ${{ env.AWS_REGION }} \
+            --query "Stacks[0].StackStatus" \
+            --output text 2>/dev/null || echo "DOES_NOT_EXIST")
+
+          echo "Current stack status: $STACK_STATUS"
+
+          if [[ "$STACK_STATUS" == "UPDATE_COMPLETE" || "$STACK_STATUS" == "CREATE_COMPLETE" ]]; then
+            echo "Stack is already deployed and up to date. Skipping deployment."
+          else
+            echo "Deploying stack..."
+            aws cloudformation deploy \
+              --template-file ${{ env.TEMPLATE_PATH }} \
+              --stack-name ${{ env.STACK_NAME }} \
+              --parameter-overrides \
+                EnvironmentName=production \
+                GitHubOwner=khalidrehman3174 \
+                GitHubRepo=SWE7303-Infrastructure \
+                GitHubBranch=main \
+                CodeStarConnectionArn=arn:aws:codeconnections:eu-west-2:123086253062:connection/0a32a392-0f18-404d-88be-50065557c348 \
+                CloudFormationFolder=cloudformation \
+                VpcStackName=finpay-vpc \
+                ALBStackName=finpay-alb \
+                ECRStackName=finpay-ecr \
+                ECSStackName=finpay-ecs-cluster \
+                RDSStackName=finpay-rds \
+                ArtifactBucketName=finpay-production-infra-pipeline-artifacts-123086253062 \
+              --capabilities CAPABILITY_NAMED_IAM \
+              --no-fail-on-empty-changeset \
+              --region ${{ env.AWS_REGION }}
+          fi
 
       # ── Step 5: Confirm deployment ────────────────────
       - name: Confirm stack deployment
@@ -62,4 +76,5 @@ jobs:
           aws cloudformation describe-stacks \
             --stack-name ${{ env.STACK_NAME }} \
             --region ${{ env.AWS_REGION }} \
-            --query "Stacks[0].StackStatus"
+            --query "Stacks[0].StackStatus" \
+            --output text
