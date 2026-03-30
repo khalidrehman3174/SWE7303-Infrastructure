@@ -1,0 +1,22 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: FinPay Basic Infrastructure
+
+Resources:
+
+  FinpayCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: finpay-cluster
+
+  FinpayRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: finpay-app
+
+Outputs:
+
+  ClusterName:
+    Value: !Ref FinpayCluster
+
+  RepositoryUri:
+    Value: !GetAtt FinpayRepository.RepositoryUri
