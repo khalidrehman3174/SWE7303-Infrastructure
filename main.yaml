@@ -152,4 +152,4 @@ Resources:
   Repository:
     Type: AWS::ECR::Repository
     Properties:
-      RepositoryName: finpay-app
+      RepositoryName: swe7303-finpay-app
