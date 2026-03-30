@@ -1,5 +1,110 @@
 name: Deploy Finpay Modular Pipelines
+
 on:
   push:
     branches:
       - main
+  workflow_dispatch:
+
+env:
+  AWS_REGION: eu-west-2
+  GITHUB_CONNECTION_ARN: arn:aws:codeconnections:eu-west-2:123086253062:connection/0a32a392-0f18-404d-88be-50065557c348
+  ARTIFACT_BUCKET: finpay-dev-pipeline-artifacts-123086253062
+
+jobs:
+  deploy-pipelines:
+    name: Deploy Modular Pipelines to AWS
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify AWS connection
+        run: aws sts get-caller-identity
+
+      - name: Deploy VPC Pipeline
+        run: |
+          aws cloudformation deploy \
+            --template-file pipeline/vpc-pipeline.yml \
+            --stack-name finpay-dev-vpc-pipeline \
+            --parameter-overrides \
+              GitHubConnectionArn=${{ env.GITHUB_CONNECTION_ARN }} \
+              ArtifactBucketName=${{ env.ARTIFACT_BUCKET }} \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --no-fail-on-empty-changeset \
+            --region ${{ env.AWS_REGION }}
+
+      - name: Deploy ECR Pipeline
+        run: |
+          aws cloudformation deploy \
+            --template-file pipeline/ecr-pipeline.yml \
+            --stack-name finpay-dev-ecr-pipeline \
+            --parameter-overrides \
+              GitHubConnectionArn=${{ env.GITHUB_CONNECTION_ARN }} \
+              ArtifactBucketName=${{ env.ARTIFACT_BUCKET }} \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --no-fail-on-empty-changeset \
+            --region ${{ env.AWS_REGION }}
+
+      - name: Deploy RDS Pipeline
+        run: |
+          aws cloudformation deploy \
+            --template-file pipeline/rds-pipeline.yml \
+            --stack-name finpay-dev-rds-pipeline \
+            --parameter-overrides \
+              GitHubConnectionArn=${{ env.GITHUB_CONNECTION_ARN }} \
+              ArtifactBucketName=${{ env.ARTIFACT_BUCKET }} \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --no-fail-on-empty-changeset \
+            --region ${{ env.AWS_REGION }}
+
+      - name: Deploy ElastiCache Pipeline
+        run: |
+          aws cloudformation deploy \
+            --template-file pipeline/elasticache-pipeline.yml \
+            --stack-name finpay-dev-elasticache-pipeline \
+            --parameter-overrides \
+              GitHubConnectionArn=${{ env.GITHUB_CONNECTION_ARN }} \
+              ArtifactBucketName=${{ env.ARTIFACT_BUCKET }} \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --no-fail-on-empty-changeset \
+            --region ${{ env.AWS_REGION }}
+
+      - name: Deploy ALB Pipeline
+        run: |
+          aws cloudformation deploy \
+            --template-file pipeline/alb-pipeline.yml \
+            --stack-name finpay-dev-alb-pipeline \
+            --parameter-overrides \
+              GitHubConnectionArn=${{ env.GITHUB_CONNECTION_ARN }} \
+              ArtifactBucketName=${{ env.ARTIFACT_BUCKET }} \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --no-fail-on-empty-changeset \
+            --region ${{ env.AWS_REGION }}
+
+      - name: Deploy ECS Cluster Pipeline
+        run: |
+          aws cloudformation deploy \
+            --template-file pipeline/ecs-cluster-pipeline.yml \
+            --stack-name finpay-dev-ecs-cluster-pipeline \
+            --parameter-overrides \
+              GitHubConnectionArn=${{ env.GITHUB_CONNECTION_ARN }} \
+              ArtifactBucketName=${{ env.ARTIFACT_BUCKET }} \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --no-fail-on-empty-changeset \
+            --region ${{ env.AWS_REGION }}
+
+      - name: Summary
+        run: |
+          echo "=== All Modular Pipelines Deployed ==="
+          aws codepipeline list-pipelines \
+            --region ${{ env.AWS_REGION }} \
+            --query "pipelines[?contains(name, 'finpay')].name" \
+            --output table
