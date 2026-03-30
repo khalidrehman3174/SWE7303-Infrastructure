@@ -129,7 +129,7 @@ Resources:
             install:
               commands:
                 - echo "=== Install phase ==="
-           build:
+            build:
               commands:
                 - echo "=== Validating vpc.yml ==="
                 - aws cloudformation validate-template --template-body file://cloudformation/vpc.yml --region eu-west-2
