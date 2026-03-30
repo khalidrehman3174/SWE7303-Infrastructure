@@ -3,13 +3,15 @@ Description: FinPay Full Infrastructure (No NAT - Low Cost)
 
 Resources:
 
-# ---------------- VPC ----------------
+  # ---------------- VPC ----------------
   VPC:
     Type: AWS::EC2::VPC
     Properties:
       CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
 
-# ---------------- Internet Gateway ----------------
+  # ---------------- Internet Gateway ----------------
   InternetGateway:
     Type: AWS::EC2::InternetGateway
 
@@ -19,12 +21,13 @@ Resources:
       VpcId: !Ref VPC
       InternetGatewayId: !Ref InternetGateway
 
-# ---------------- Subnets ----------------
+  # ---------------- Subnets ----------------
   PublicSubnet1:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
       CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
       MapPublicIpOnLaunch: true
 
   PublicSubnet2:
@@ -32,9 +35,10 @@ Resources:
     Properties:
       VpcId: !Ref VPC
       CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
       MapPublicIpOnLaunch: true
 
-# ---------------- Route Table ----------------
+  # ---------------- Route Table ----------------
   RouteTable:
     Type: AWS::EC2::RouteTable
     Properties:
@@ -42,6 +46,7 @@ Resources:
 
   Route:
     Type: AWS::EC2::Route
+    DependsOn: AttachGateway
     Properties:
       RouteTableId: !Ref RouteTable
       DestinationCidrBlock: 0.0.0.0/0
@@ -59,11 +64,11 @@ Resources:
       SubnetId: !Ref PublicSubnet2
       RouteTableId: !Ref RouteTable
 
-# ---------------- Security Group ----------------
+  # ---------------- Security Groups ----------------
   ALBSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Allow HTTP
+      GroupDescription: Allow HTTP from internet to ALB
       VpcId: !Ref VPC
       SecurityGroupIngress:
         - IpProtocol: tcp
@@ -71,10 +76,23 @@ Resources:
           ToPort: 80
           CidrIp: 0.0.0.0/0
 
-# ---------------- ALB ----------------
+  ECSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP from ALB to ECS tasks
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+
+  # ---------------- ALB ----------------
   LoadBalancer:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
+      Scheme: internet-facing
+      Type: application
       Subnets:
         - !Ref PublicSubnet1
         - !Ref PublicSubnet2
@@ -88,6 +106,9 @@ Resources:
       Protocol: HTTP
       VpcId: !Ref VPC
       TargetType: ip
+      HealthCheckPath: /
+      Matcher:
+        HttpCode: '200-399'
 
   Listener:
     Type: AWS::ElasticLoadBalancingV2::Listener
@@ -99,14 +120,17 @@ Resources:
         - Type: forward
           TargetGroupArn: !Ref TargetGroup
 
-# ---------------- ECS ----------------
+  # ---------------- ECS ----------------
   ECSCluster:
     Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: finpay-cluster
 
   TaskExecutionRole:
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
+        Version: '2012-10-17'
         Statement:
           - Effect: Allow
             Principal:
@@ -118,6 +142,7 @@ Resources:
   TaskDefinition:
     Type: AWS::ECS::TaskDefinition
     Properties:
+      Family: finpay-task
       RequiresCompatibilities:
         - FARGATE
       Cpu: 256
@@ -132,6 +157,7 @@ Resources:
 
   Service:
     Type: AWS::ECS::Service
+    DependsOn: Listener
     Properties:
       Cluster: !Ref ECSCluster
       DesiredCount: 1
@@ -140,6 +166,8 @@ Resources:
       NetworkConfiguration:
         AwsvpcConfiguration:
           AssignPublicIp: ENABLED
+          SecurityGroups:
+            - !Ref ECSSecurityGroup
           Subnets:
             - !Ref PublicSubnet1
             - !Ref PublicSubnet2
@@ -148,8 +176,21 @@ Resources:
           ContainerPort: 80
           TargetGroupArn: !Ref TargetGroup
 
-# ---------------- ECR ----------------
+  # ---------------- ECR ----------------
   Repository:
     Type: AWS::ECR::Repository
     Properties:
       RepositoryName: swe7303-finpay-app
+
+Outputs:
+  LoadBalancerDNS:
+    Description: DNS name of the Application Load Balancer
+    Value: !GetAtt LoadBalancer.DNSName
+
+  ECSClusterName:
+    Description: ECS Cluster Name
+    Value: !Ref ECSCluster
+
+  ECRRepositoryUri:
+    Description: ECR Repository URI
+    Value: !GetAtt Repository.RepositoryUri
