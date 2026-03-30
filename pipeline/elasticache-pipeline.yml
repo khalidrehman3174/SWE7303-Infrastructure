@@ -118,101 +118,16 @@ Resources:
         ComputeType: BUILD_GENERAL1_SMALL
         Image: aws/codebuild/standard:7.0
       Source:
+      Source:
         Type: CODEPIPELINE
         BuildSpec: |
           version: 0.2
           phases:
-            install:
-              commands:
-                - echo "=== Install phase ==="
             build:
               commands:
-                - echo "=== Validating elasticache.yml ==="
+                - echo "=== Validating cloudformation/elasticache.yml ==="
                 - aws cloudformation validate-template --template-body file://cloudformation/elasticache.yml --region eu-west-2
-                - echo "=== ElastiCache template is valid ==="
+                - echo "=== Template is valid ==="
           artifacts:
-            files: ['**/*']
-
-  ElastiCachePipeline:
-    Type: AWS::CodePipeline::Pipeline
-    Properties:
-      Name: !Sub "${ProjectName}-${Environment}-elasticache-pipeline"
-      RoleArn: !GetAtt PipelineRole.Arn
-      ArtifactStore:
-        Type: S3
-        Location: !Ref ArtifactBucketName
-      Stages:
-
-        - Name: Source
-          Actions:
-            - Name: Source
-              ActionTypeId:
-                Category: Source
-                Owner: AWS
-                Provider: CodeStarSourceConnection
-                Version: '1'
-              Configuration:
-                ConnectionArn: !Ref GitHubConnectionArn
-                FullRepositoryId: !Sub "${RepoOwner}/${RepoName}"
-                BranchName: !Ref RepoBranch
-                OutputArtifactFormat: CODE_ZIP
-              OutputArtifacts:
-                - Name: Source
-              RunOrder: 1
-
-        - Name: Validate
-          Actions:
-            - Name: ValidateElastiCache
-              ActionTypeId:
-                Category: Build
-                Owner: AWS
-                Provider: CodeBuild
-                Version: '1'
-              Configuration:
-                ProjectName: !Ref ValidateProject
-              InputArtifacts:
-                - Name: Source
-              OutputArtifacts:
-                - Name: ValidatedSource
-              RunOrder: 1
-
-        - Name: Deploy
-          Actions:
-            - Name: CreateChangeSet
-              ActionTypeId:
-                Category: Deploy
-                Owner: AWS
-                Provider: CloudFormation
-                Version: '1'
-              Configuration:
-                ActionMode: CHANGE_SET_REPLACE
-                StackName: !Sub "${ProjectName}-${Environment}-elasticache"
-                ChangeSetName: !Sub "${ProjectName}-${Environment}-elasticache-changeset"
-                TemplatePath: "ValidatedSource::cloudformation/elasticache.yml"
-                Capabilities: CAPABILITY_NAMED_IAM
-                RoleArn: !GetAtt CFNRole.Arn
-                ParameterOverrides: !Sub |
-                  {
-                    "Environment": "${Environment}",
-                    "ProjectName": "${ProjectName}"
-                  }
-              InputArtifacts:
-                - Name: ValidatedSource
-              RunOrder: 1
-            - Name: ExecuteChangeSet
-              ActionTypeId:
-                Category: Deploy
-                Owner: AWS
-                Provider: CloudFormation
-                Version: '1'
-              Configuration:
-                ActionMode: CHANGE_SET_EXECUTE
-                StackName: !Sub "${ProjectName}-${Environment}-elasticache"
-                ChangeSetName: !Sub "${ProjectName}-${Environment}-elasticache-changeset"
-              RunOrder: 2
-
-Outputs:
-  PipelineName:
-    Value: !Ref ElastiCachePipeline
-  PipelineUrl:
-    Value: !Sub "https://eu-west-2.console.aws.amazon.com/codesuite/codepipeline/pipelines/${ProjectName}-${Environment}-elasticache-pipeline/view"
+            files:
+              - '**/*'
