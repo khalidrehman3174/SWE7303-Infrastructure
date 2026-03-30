@@ -1,0 +1,10 @@
+version: 0.2
+phases:
+  build:
+    commands:
+      - echo "Deploying infrastructure CloudFormation stack..."
+      - aws cloudformation deploy --template-file template.yml --stack-name finpay-infra --capabilities CAPABILITY_IAM --region eu-west-2 --no-fail-on-empty-changeset
+      - echo "Infrastructure deployment completed!"
+  post_build:
+    commands:
+      - aws cloudformation describe-stacks --stack-name finpay-infra --query 'Stacks[0].Outputs' --output table
