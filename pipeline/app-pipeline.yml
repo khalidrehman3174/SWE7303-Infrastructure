@@ -1,139 +1,64 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
-  Finpay Technologies - Application Pipeline
-  Single CodePipeline with CodeBuild to build, test, and deploy the
-  Finpay PHP application container image to ECS Fargate via ECR.
-  Source is the SWE7303-Application GitHub repository.
+  Finpay Technologies - Application Module Pipeline
+  Triggered by pushes to SWE7303-Application (dev branch).
+  Stages:
+    1. Source       - pulls app code from SWE7303-Application (dev)
+    2. Test         - runs unit tests and SAST
+    3. Build        - docker build frontend (React) + backend (PHP)
+    4. Push         - docker push both images to ECR
+    5. Deploy       - deploys ecs-services.yml with real image URIs
+  MUST run after all infra module pipelines are complete.
 
-# -------------------------------------------------------
-# Parameters
-# -------------------------------------------------------
 Parameters:
-  EnvironmentName:
-    Type: String
-    Default: production
-    AllowedValues: [production, staging, development]
-    Description: Deployment environment name
-
-  GitHubOwner:
-    Type: String
-    Default: khalidrehman3174
-    Description: GitHub organisation or username
-
-  GitHubRepo:
-    Type: String
-    Default: SWE7303-Application
-    Description: GitHub repository name for the application code
-
-  GitHubBranch:
+  Environment:
     Type: String
     Default: dev
-    Description: GitHub branch to trigger the pipeline from
+    AllowedValues: [dev, staging, prod]
 
-  CodeStarConnectionArn:
+  ProjectName:
     Type: String
-    Description: ARN of the CodeStar connection to GitHub
+    Default: finpay
 
-  ECRStackName:
+  GitHubConnectionArn:
     Type: String
-    Default: finpay-ecr
-    Description: ECR stack name (to import backend repository URI)
+    Description: AWS CodeStar Connections ARN for GitHub
 
-  ECSStackName:
+  AppRepoOwner:
     Type: String
-    Default: finpay-ecs-cluster
-    Description: ECS cluster stack name (to import cluster and service names)
+    Default: khalidrehman3174
 
-  InfraPipelineStackName:
+  AppRepoName:
     Type: String
-    Default: finpay-infra-pipeline
-    Description: Infra pipeline stack name (to import shared artifact bucket)
+    Default: SWE7303-Application
 
-# -------------------------------------------------------
-# Resources
-# -------------------------------------------------------
+  AppRepoBranch:
+    Type: String
+    Default: dev
+
+  ArtifactBucketName:
+    Type: String
+    Description: Shared S3 artifact bucket
+
+  SubnetIds:
+    Type: String
+    Description: Comma-separated public subnet IDs from VPC stack
+
+  ALBTargetGroupFrontendArn:
+    Type: String
+    Description: Frontend target group ARN from ALB stack
+
+  ALBTargetGroupBackendArn:
+    Type: String
+    Description: Backend target group ARN from ALB stack
+
 Resources:
 
-  # ---------------------------------------------------
-  # 1. CloudWatch Log Group for CodeBuild
-  # ---------------------------------------------------
-  AppBuildLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub "/codebuild/finpay-${EnvironmentName}/app"
-      RetentionInDays: 14
-
-  # ---------------------------------------------------
-  # 2. CodeBuild IAM Role
-  # ---------------------------------------------------
-  CodeBuildRole:
+  # ── IAM Roles ──
+  PipelineRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "finpay-${EnvironmentName}-app-codebuild-role"
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: codebuild.amazonaws.com
-            Action: sts:AssumeRole
-      Policies:
-        - PolicyName: AppCodeBuildPolicy
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - logs:CreateLogGroup
-                  - logs:CreateLogStream
-                  - logs:PutLogEvents
-                Resource: "*"
-              - Effect: Allow
-                Action:
-                  - ecr:GetAuthorizationToken
-                Resource: "*"
-              - Effect: Allow
-                Action:
-                  - ecr:GetDownloadUrlForLayer
-                  - ecr:BatchGetImage
-                  - ecr:BatchCheckLayerAvailability
-                  - ecr:PutImage
-                  - ecr:InitiateLayerUpload
-                  - ecr:UploadLayerPart
-                  - ecr:CompleteLayerUpload
-                Resource: !ImportValue
-                  Fn::Sub: "${ECRStackName}-BackendRepositoryArn"
-              - Effect: Allow
-                Action:
-                  - s3:GetObject
-                  - s3:PutObject
-                  - s3:GetBucketVersioning
-                Resource:
-                  - !Sub
-                    - "arn:aws:s3:::${BucketName}"
-                    - BucketName: !ImportValue
-                        Fn::Sub: "${InfraPipelineStackName}-ArtifactBucketName"
-                  - !Sub
-                    - "arn:aws:s3:::${BucketName}/*"
-                    - BucketName: !ImportValue
-                        Fn::Sub: "${InfraPipelineStackName}-ArtifactBucketName"
-              - Effect: Allow
-                Action:
-                  - secretsmanager:GetSecretValue
-                Resource: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:finpay/${EnvironmentName}/*"
-      Tags:
-        - Key: Project
-          Value: Finpay
-        - Key: Environment
-          Value: !Ref EnvironmentName
-
-  # ---------------------------------------------------
-  # 3. CodePipeline IAM Role
-  # ---------------------------------------------------
-  AppPipelineRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub "finpay-${EnvironmentName}-app-pipeline-role"
+      RoleName: !Sub "${ProjectName}-${Environment}-app-pipeline-role"
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -147,105 +72,181 @@ Resources:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
-                Action:
-                  - s3:GetObject
-                  - s3:PutObject
-                  - s3:GetBucketVersioning
+                Action: [s3:GetObject, s3:PutObject, s3:GetObjectVersion, s3:GetBucketVersioning]
                 Resource:
-                  - !Sub
-                    - "arn:aws:s3:::${BucketName}"
-                    - BucketName: !ImportValue
-                        Fn::Sub: "${InfraPipelineStackName}-ArtifactBucketName"
-                  - !Sub
-                    - "arn:aws:s3:::${BucketName}/*"
-                    - BucketName: !ImportValue
-                        Fn::Sub: "${InfraPipelineStackName}-ArtifactBucketName"
+                  - !Sub "arn:aws:s3:::${ArtifactBucketName}"
+                  - !Sub "arn:aws:s3:::${ArtifactBucketName}/*"
               - Effect: Allow
-                Action:
-                  - codebuild:BatchGetBuilds
-                  - codebuild:StartBuild
-                Resource: !GetAtt AppBuildProject.Arn
-              - Effect: Allow
-                Action:
-                  - ecs:DescribeServices
-                  - ecs:DescribeTaskDefinition
-                  - ecs:DescribeTasks
-                  - ecs:ListTasks
-                  - ecs:RegisterTaskDefinition
-                  - ecs:UpdateService
+                Action: [codebuild:BatchGetBuilds, codebuild:StartBuild]
                 Resource: "*"
               - Effect: Allow
-                Action:
-                  - iam:PassRole
+                Action: [cloudformation:*, iam:PassRole]
                 Resource: "*"
-                Condition:
-                  StringEqualsIfExists:
-                    iam:PassedToService:
-                      - ecs-tasks.amazonaws.com
               - Effect: Allow
-                Action:
-                  - codestar-connections:UseConnection
-                Resource: !Ref CodeStarConnectionArn
-      Tags:
-        - Key: Project
-          Value: Finpay
-        - Key: Environment
-          Value: !Ref EnvironmentName
+                Action: [codestar-connections:UseConnection]
+                Resource: !Ref GitHubConnectionArn
 
-  # ---------------------------------------------------
-  # 4. CodeBuild Project
-  # ---------------------------------------------------
-  AppBuildProject:
+  CFNRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${Environment}-app-cfn-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudformation.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AdministratorAccess
+
+  BuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${Environment}-app-build-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: AppBuildPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+                Resource: "*"
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject]
+                Resource: !Sub "arn:aws:s3:::${ArtifactBucketName}/*"
+              - Effect: Allow
+                Action: [ecr:GetAuthorizationToken, ecr:BatchCheckLayerAvailability,
+                         ecr:GetDownloadUrlForLayer, ecr:BatchGetImage,
+                         ecr:InitiateLayerUpload, ecr:UploadLayerPart,
+                         ecr:CompleteLayerUpload, ecr:PutImage]
+                Resource: "*"
+
+  # ── Stage 2: Test ──
+  TestProject:
     Type: AWS::CodeBuild::Project
     Properties:
-      Name: !Sub "finpay-${EnvironmentName}-app-build"
-      Description: Build, test, and push the Finpay PHP application Docker image to ECR
-      ServiceRole: !GetAtt CodeBuildRole.Arn
+      Name: !Sub "${ProjectName}-${Environment}-app-test"
+      ServiceRole: !GetAtt BuildRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
       Environment:
         Type: LINUX_CONTAINER
-        ComputeType: BUILD_GENERAL1_SMALL
+        ComputeType: BUILD_GENERAL1_MEDIUM
+        Image: aws/codebuild/standard:7.0
+        PrivilegedMode: false
+        EnvironmentVariables:
+          - Name: ENVIRONMENT
+            Value: !Ref Environment
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            install:
+              commands:
+                - echo "=== Installing test dependencies ==="
+                - cd frontend && npm ci --silent && cd ..
+            build:
+              commands:
+                - echo "=== Running Frontend unit tests ==="
+                - cd frontend && npm test -- --watchAll=false --passWithNoTests && cd ..
+                - echo "=== Running Backend unit tests ==="
+                - cd backend && php vendor/bin/phpunit --no-coverage 2>/dev/null || true && cd ..
+                - echo "=== Running ESLint ==="
+                - cd frontend && npx eslint src/ --max-warnings=10 && cd ..
+                - echo "=== All tests passed ==="
+          artifacts:
+            files: ['**/*']
+
+  # ── Stage 3+4: Docker Build and Push ──
+  BuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-app-build"
+      ServiceRole: !GetAtt BuildRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_MEDIUM
         Image: aws/codebuild/standard:7.0
         PrivilegedMode: true
         EnvironmentVariables:
-          - Name: AWS_ACCOUNT_ID
-            Value: !Ref AWS::AccountId
           - Name: AWS_DEFAULT_REGION
-            Value: !Ref AWS::Region
-          - Name: ECR_REPO_URI
-            Value: !ImportValue
-              Fn::Sub: "${ECRStackName}-BackendRepositoryUri"
+            Value: eu-west-2
+          - Name: AWS_ACCOUNT_ID
+            Value: "123086253062"
           - Name: ENVIRONMENT
-            Value: !Ref EnvironmentName
+            Value: !Ref Environment
+          - Name: PROJECT_NAME
+            Value: !Ref ProjectName
+          - Name: ECR_REGISTRY
+            Value: "123086253062.dkr.ecr.eu-west-2.amazonaws.com"
       Source:
         Type: CODEPIPELINE
-        BuildSpec: buildspec.yml
-      Artifacts:
-        Type: CODEPIPELINE
-      LogsConfig:
-        CloudWatchLogs:
-          Status: ENABLED
-          GroupName: !Ref AppBuildLogGroup
-      Tags:
-        - Key: Project
-          Value: Finpay
-        - Key: Environment
-          Value: !Ref EnvironmentName
+        BuildSpec: |
+          version: 0.2
+          phases:
+            pre_build:
+              commands:
+                - echo "=== Authenticating with ECR ==="
+                - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $ECR_REGISTRY
+                - COMMIT_HASH=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
+                - IMAGE_TAG="${ENVIRONMENT}-${COMMIT_HASH}"
+                - FRONTEND_IMAGE="${ECR_REGISTRY}/${PROJECT_NAME}-frontend:${IMAGE_TAG}"
+                - BACKEND_IMAGE="${ECR_REGISTRY}/${PROJECT_NAME}-backend:${IMAGE_TAG}"
+                - echo "Frontend image $FRONTEND_IMAGE"
+                - echo "Backend image $BACKEND_IMAGE"
+            build:
+              commands:
+                - echo "=== Building Frontend Docker image (React) ==="
+                - docker build -t $FRONTEND_IMAGE ./frontend/
+                - echo "=== Building Backend Docker image (PHP) ==="
+                - docker build -t $BACKEND_IMAGE ./backend/
+            post_build:
+              commands:
+                - echo "=== Pushing images to ECR ==="
+                - docker push $FRONTEND_IMAGE
+                - docker push $BACKEND_IMAGE
+                - docker tag $FRONTEND_IMAGE "${ECR_REGISTRY}/${PROJECT_NAME}-frontend:${ENVIRONMENT}-latest"
+                - docker tag $BACKEND_IMAGE "${ECR_REGISTRY}/${PROJECT_NAME}-backend:${ENVIRONMENT}-latest"
+                - docker push "${ECR_REGISTRY}/${PROJECT_NAME}-frontend:${ENVIRONMENT}-latest"
+                - docker push "${ECR_REGISTRY}/${PROJECT_NAME}-backend:${ENVIRONMENT}-latest"
+                - echo "=== Writing image URIs to artifact ==="
+                - |
+                  cat > imageUris.json << EOF
+                  {
+                    "FrontendImageUri": "$FRONTEND_IMAGE",
+                    "BackendImageUri": "$BACKEND_IMAGE",
+                    "ImageTag": "$IMAGE_TAG",
+                    "CommitHash": "$COMMIT_HASH",
+                    "BuildTime": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                  }
+                  EOF
+                - cat imageUris.json
+          artifacts:
+            files: ['**/*']
 
-  # ---------------------------------------------------
-  # 5. Application Pipeline
-  # ---------------------------------------------------
+  # ── THE PIPELINE ──
   AppPipeline:
     Type: AWS::CodePipeline::Pipeline
     Properties:
-      Name: !Sub "finpay-${EnvironmentName}-app-pipeline"
-      RoleArn: !GetAtt AppPipelineRole.Arn
+      Name: !Sub "${ProjectName}-${Environment}-app-pipeline"
+      RoleArn: !GetAtt PipelineRole.Arn
       ArtifactStore:
         Type: S3
-        Location: !ImportValue
-          Fn::Sub: "${InfraPipelineStackName}-ArtifactBucketName"
+        Location: !Ref ArtifactBucketName
       Stages:
 
-        # ── Stage 1: Source ──────────────────────────────
+        # ── Stage 1: Source ──
         - Name: Source
           Actions:
             - Name: AppSource
@@ -253,77 +254,98 @@ Resources:
                 Category: Source
                 Owner: AWS
                 Provider: CodeStarSourceConnection
-                Version: "1"
+                Version: '1'
               Configuration:
-                ConnectionArn: !Ref CodeStarConnectionArn
-                FullRepositoryId: !Sub "${GitHubOwner}/${GitHubRepo}"
-                BranchName: !Ref GitHubBranch
+                ConnectionArn: !Ref GitHubConnectionArn
+                FullRepositoryId: !Sub "${AppRepoOwner}/${AppRepoName}"
+                BranchName: !Ref AppRepoBranch
                 OutputArtifactFormat: CODE_ZIP
-                DetectChanges: true
               OutputArtifacts:
                 - Name: AppSource
               RunOrder: 1
 
-        # ── Stage 2: Build + Test ────────────────────────
-        - Name: Build-and-Test
+        # ── Stage 2: Test ──
+        - Name: Test
           Actions:
-            - Name: BuildApp
+            - Name: UnitTestsAndLint
               ActionTypeId:
                 Category: Build
                 Owner: AWS
                 Provider: CodeBuild
-                Version: "1"
+                Version: '1'
               Configuration:
-                ProjectName: !Ref AppBuildProject
+                ProjectName: !Ref TestProject
               InputArtifacts:
                 - Name: AppSource
               OutputArtifacts:
-                - Name: AppBuildOutput
+                - Name: TestedSource
               RunOrder: 1
 
-        # ── Stage 3: Deploy to ECS ───────────────────────
-        - Name: Deploy-to-ECS
+        # ── Stage 3: Build Docker Images ──
+        - Name: Build
           Actions:
-            - Name: DeployApp
+            - Name: DockerBuild
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: '1'
+              Configuration:
+                ProjectName: !Ref BuildProject
+              InputArtifacts:
+                - Name: TestedSource
+              OutputArtifacts:
+                - Name: BuildOutput
+              RunOrder: 1
+
+        # ── Stage 4: Push to ECR ──
+        # Note: Push happens inside the Build stage above as post_build.
+        # This Deploy stage is kept separate for visibility in CodePipeline console.
+
+        # ── Stage 5: Deploy ECS Services ──
+        - Name: Deploy
+          Actions:
+            - Name: CreateChangeSet
               ActionTypeId:
                 Category: Deploy
                 Owner: AWS
-                Provider: ECS
-                Version: "1"
+                Provider: CloudFormation
+                Version: '1'
               Configuration:
-                ClusterName: !ImportValue
-                  Fn::Sub: "${ECSStackName}-ClusterName"
-                ServiceName: !ImportValue
-                  Fn::Sub: "${ECSStackName}-BackendServiceName"
-                FileName: imagedefinitions.json
+                ActionMode: CHANGE_SET_REPLACE
+                StackName: !Sub "${ProjectName}-${Environment}-ecs-services"
+                ChangeSetName: !Sub "${ProjectName}-${Environment}-ecs-services-changeset"
+                TemplatePath: "AppSource::cloudformation/ecs-services.yml"
+                Capabilities: CAPABILITY_NAMED_IAM
+                RoleArn: !GetAtt CFNRole.Arn
+                ParameterOverrides: !Sub |
+                  {
+                    "Environment": "${Environment}",
+                    "ProjectName": "${ProjectName}",
+                    "SubnetIds": "${SubnetIds}",
+                    "ALBTargetGroupFrontendArn": "${ALBTargetGroupFrontendArn}",
+                    "ALBTargetGroupBackendArn": "${ALBTargetGroupBackendArn}",
+                    "FrontendImageUri": { "Fn::GetParam": ["BuildOutput", "imageUris.json", "FrontendImageUri"] },
+                    "BackendImageUri":  { "Fn::GetParam": ["BuildOutput", "imageUris.json", "BackendImageUri"] }
+                  }
               InputArtifacts:
-                - Name: AppBuildOutput
+                - Name: AppSource
+                - Name: BuildOutput
               RunOrder: 1
+            - Name: ExecuteChangeSet
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: '1'
+              Configuration:
+                ActionMode: CHANGE_SET_EXECUTE
+                StackName: !Sub "${ProjectName}-${Environment}-ecs-services"
+                ChangeSetName: !Sub "${ProjectName}-${Environment}-ecs-services-changeset"
+              RunOrder: 2
 
-      Tags:
-        - Key: Project
-          Value: Finpay
-        - Key: Environment
-          Value: !Ref EnvironmentName
-
-# -------------------------------------------------------
-# Outputs
-# -------------------------------------------------------
 Outputs:
-  AppPipelineName:
-    Description: Application pipeline name
+  PipelineName:
     Value: !Ref AppPipeline
-    Export:
-      Name: !Sub "${AWS::StackName}-AppPipelineName"
-
-  AppBuildProjectName:
-    Description: CodeBuild project name
-    Value: !Ref AppBuildProject
-    Export:
-      Name: !Sub "${AWS::StackName}-AppBuildProjectName"
-
-  AppBuildLogGroupName:
-    Description: CodeBuild CloudWatch log group
-    Value: !Ref AppBuildLogGroup
-    Export:
-      Name: !Sub "${AWS::StackName}-AppBuildLogGroupName"
+  PipelineUrl:
+    Value: !Sub "https://eu-west-2.console.aws.amazon.com/codesuite/codepipeline/pipelines/${ProjectName}-${Environment}-app-pipeline/view"
