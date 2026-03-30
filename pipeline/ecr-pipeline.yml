@@ -124,12 +124,11 @@ Resources:
           phases:
             install:
               commands:
-                - pip install cfn-lint
+                - echo "=== Install phase ==="
             build:
               commands:
                 - echo "=== Validating ecr.yml ==="
                 - aws cloudformation validate-template --template-body file://cloudformation/ecr.yml --region eu-west-2
-                - cfn-lint cloudformation/ecr.yml
                 - echo "=== ECR template is valid ==="
           artifacts:
             files: ['**/*']

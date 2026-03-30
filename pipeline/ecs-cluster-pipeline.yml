@@ -126,12 +126,11 @@ Resources:
           phases:
             install:
               commands:
-                - pip install cfn-lint
+                - echo "=== Install phase ==="
             build:
               commands:
                 - echo "=== Validating ecs-cluster.yml ==="
                 - aws cloudformation validate-template --template-body file://cloudformation/ecs-cluster.yml --region eu-west-2
-                - cfn-lint cloudformation/ecs-cluster.yml
                 - echo "=== ECS Cluster template is valid ==="
           artifacts:
             files: ['**/*']

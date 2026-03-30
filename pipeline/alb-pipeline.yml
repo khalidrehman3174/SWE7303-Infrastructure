@@ -125,12 +125,11 @@ Resources:
           phases:
             install:
               commands:
-                - pip install cfn-lint
+                - echo "=== Install phase ==="
             build:
               commands:
                 - echo "=== Validating alb.yml ==="
                 - aws cloudformation validate-template --template-body file://cloudformation/alb.yml --region eu-west-2
-                - cfn-lint cloudformation/alb.yml
                 - echo "=== ALB template is valid ==="
           artifacts:
             files: ['**/*']

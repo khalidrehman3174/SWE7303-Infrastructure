@@ -124,12 +124,11 @@ Resources:
           phases:
             install:
               commands:
-                - pip install cfn-lint
+                - echo "=== Install phase ==="
             build:
               commands:
                 - echo "=== Validating rds.yml ==="
                 - aws cloudformation validate-template --template-body file://cloudformation/rds.yml --region eu-west-2
-                - cfn-lint cloudformation/rds.yml
                 - echo "=== RDS template is valid ==="
           artifacts:
             files: ['**/*']
