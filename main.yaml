@@ -29,6 +29,9 @@ Resources:
       CidrBlock: 10.0.1.0/24
       AvailabilityZone: !Select [0, !GetAZs '']
       MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: finpay-public-subnet-1
 
   PublicSubnet2:
     Type: AWS::EC2::Subnet
@@ -37,6 +40,9 @@ Resources:
       CidrBlock: 10.0.2.0/24
       AvailabilityZone: !Select [1, !GetAZs '']
       MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: finpay-public-subnet-2
 
   # ---------------- Route Table ----------------
   RouteTable:
