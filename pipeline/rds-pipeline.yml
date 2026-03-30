@@ -1,35 +1,24 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: >
-  Finpay Technologies - RDS Module Pipeline
-  Deploys rds.yml only. Creates MySQL RDS instance.
-  Depends on VPC pipeline outputs (VpcId, SubnetIds, SecurityGroups).
-  Trigger: push to SWE7303-Infrastructure main branch (cloudformation/rds.yml)
+Description: Finpay Technologies - RDS Module Pipeline
 
 Parameters:
   Environment:
     Type: String
     Default: dev
-    AllowedValues: [dev, staging, prod]
-
   ProjectName:
     Type: String
     Default: finpay
-
   GitHubConnectionArn:
     Type: String
-
   RepoOwner:
     Type: String
     Default: khalidrehman3174
-
   RepoName:
     Type: String
     Default: SWE7303-Infrastructure
-
   RepoBranch:
     Type: String
     Default: main
-
   ArtifactBucketName:
     Type: String
 
@@ -47,7 +36,7 @@ Resources:
               Service: codepipeline.amazonaws.com
             Action: sts:AssumeRole
       Policies:
-        - PolicyName: RDSPipelinePolicy
+        - PolicyName: Policy
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
@@ -92,7 +81,7 @@ Resources:
               Service: codebuild.amazonaws.com
             Action: sts:AssumeRole
       Policies:
-        - PolicyName: RDSBuildPolicy
+        - PolicyName: Policy
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
@@ -118,16 +107,94 @@ Resources:
         ComputeType: BUILD_GENERAL1_SMALL
         Image: aws/codebuild/standard:7.0
       Source:
-      Source:
         Type: CODEPIPELINE
         BuildSpec: |
           version: 0.2
           phases:
             build:
               commands:
-                - echo "=== Validating cloudformation/rds.yml ==="
+                - echo "Validating rds.yml"
                 - aws cloudformation validate-template --template-body file://cloudformation/rds.yml --region eu-west-2
-                - echo "=== Template is valid ==="
+                - echo "Valid"
           artifacts:
             files:
               - '**/*'
+
+  RDSPipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-rds-pipeline"
+      RoleArn: !GetAtt PipelineRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ArtifactBucketName
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: Source
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeStarSourceConnection
+                Version: '1'
+              Configuration:
+                ConnectionArn: !Ref GitHubConnectionArn
+                FullRepositoryId: !Sub "${RepoOwner}/${RepoName}"
+                BranchName: !Ref RepoBranch
+                OutputArtifactFormat: CODE_ZIP
+              OutputArtifacts:
+                - Name: Source
+              RunOrder: 1
+        - Name: Validate
+          Actions:
+            - Name: ValidateRDS
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: '1'
+              Configuration:
+                ProjectName: !Ref ValidateProject
+              InputArtifacts:
+                - Name: Source
+              OutputArtifacts:
+                - Name: ValidatedSource
+              RunOrder: 1
+        - Name: Deploy
+          Actions:
+            - Name: CreateChangeSet
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: '1'
+              Configuration:
+                ActionMode: CHANGE_SET_REPLACE
+                StackName: !Sub "${ProjectName}-${Environment}-rds"
+                ChangeSetName: !Sub "${ProjectName}-${Environment}-rds-changeset"
+                TemplatePath: "ValidatedSource::cloudformation/rds.yml"
+                Capabilities: CAPABILITY_NAMED_IAM
+                RoleArn: !GetAtt CFNRole.Arn
+                ParameterOverrides: !Sub |
+                  {
+                    "Environment": "${Environment}",
+                    "ProjectName": "${ProjectName}"
+                  }
+              InputArtifacts:
+                - Name: ValidatedSource
+              RunOrder: 1
+            - Name: ExecuteChangeSet
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: '1'
+              Configuration:
+                ActionMode: CHANGE_SET_EXECUTE
+                StackName: !Sub "${ProjectName}-${Environment}-rds"
+                ChangeSetName: !Sub "${ProjectName}-${Environment}-rds-changeset"
+              RunOrder: 2
+
+Outputs:
+  PipelineName:
+    Value: !Ref RDSPipeline
