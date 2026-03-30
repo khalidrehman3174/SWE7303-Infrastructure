@@ -175,10 +175,11 @@ Resources:
                 TemplatePath: "ValidatedSource::cloudformation/ecs-cluster.yml"
                 Capabilities: CAPABILITY_NAMED_IAM
                 RoleArn: !GetAtt CFNRole.Arn
-                ParameterOverrides: !Sub |
+                ParameterOverrides: |
                   {
-                    "Environment": "${Environment}",
-                    "ProjectName": "${ProjectName}"
+                    "Environment": "dev",
+                    "ProjectName": "finpay",
+                    "VpcId": "vpc-01fee7d26b40b8ea9"
                   }
               InputArtifacts:
                 - Name: ValidatedSource

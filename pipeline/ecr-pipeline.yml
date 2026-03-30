@@ -175,10 +175,11 @@ Resources:
                 TemplatePath: "ValidatedSource::cloudformation/ecr.yml"
                 Capabilities: CAPABILITY_NAMED_IAM
                 RoleArn: !GetAtt CFNRole.Arn
-                ParameterOverrides: !Sub |
+                ParameterOverrides: |
                   {
-                    "Environment": "${Environment}",
-                    "ProjectName": "${ProjectName}"
+                    "EnvironmentName": "dev",
+                    "UntaggedImageRetentionDays": "30",
+                    "ImageRetentionCount": "5"
                   }
               InputArtifacts:
                 - Name: ValidatedSource

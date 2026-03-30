@@ -175,10 +175,11 @@ Resources:
                 TemplatePath: "ValidatedSource::cloudformation/alb.yml"
                 Capabilities: CAPABILITY_NAMED_IAM
                 RoleArn: !GetAtt CFNRole.Arn
-                ParameterOverrides: !Sub |
+                ParameterOverrides: |
                   {
-                    "Environment": "${Environment}",
-                    "ProjectName": "${ProjectName}"
+                    "EnvironmentName": "dev",
+                    "VpcStackName": "finpay-dev-vpc",
+                    "DeletionProtection": "false"
                   }
               InputArtifacts:
                 - Name: ValidatedSource
