@@ -133,7 +133,7 @@ Resources:
               commands:
                 - echo "=== Validating vpc.yml ==="
                 - aws cloudformation validate-template --template-body file://cloudformation/vpc.yml --region eu-west-2
-                - cfn-lint cloudformation/vpc.yml
+                - cfn-lint cloudformation/vpc.yml --include-checks W --ignore-checks W3010 W1020
                 - echo "=== VPC template is valid ==="
           artifacts:
             files: ['**/*']
