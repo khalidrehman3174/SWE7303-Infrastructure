@@ -1,38 +1,96 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Finpay Technologies - VPC and Network Infrastructure
+Description: >
+  Finpay Technologies - VPC Stack (Assessment/Dev Optimised)
+  Minimal cost configuration for MSc dissertation assessment.
+  NO NAT Gateway (saves ~$33/month), NO private subnets.
+  ECS Fargate tasks run in public subnets with security groups
+  controlling access. Suitable for assessment demonstration only.
 
 Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+
   ProjectName:
     Type: String
     Default: finpay
-    Description: Project name used for resource naming
 
-  EnvironmentName:          # <-- same level as ProjectName
+  VpcCidr:
     Type: String
-    Default: production
-    AllowedValues: [production, staging, development]
-    Description: Deployment environment name
+    Default: 10.0.0.0/16
+
+  PublicSubnet1Cidr:
+    Type: String
+    Default: 10.0.1.0/24
+
+  PublicSubnet2Cidr:
+    Type: String
+    Default: 10.0.2.0/24
+
+Outputs:
+  VpcId:
+    Description: VPC ID
+    Value: !Ref VPC
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-VpcId"
+
+  PublicSubnet1Id:
+    Description: Public Subnet 1 ID (eu-west-2a)
+    Value: !Ref PublicSubnet1
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-PublicSubnet1Id"
+
+  PublicSubnet2Id:
+    Description: Public Subnet 2 ID (eu-west-2b)
+    Value: !Ref PublicSubnet2
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-PublicSubnet2Id"
+
+  PublicSubnetIds:
+    Description: Comma-separated list of public subnet IDs
+    Value: !Sub "${PublicSubnet1},${PublicSubnet2}"
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-PublicSubnetIds"
+
+  InternetGatewayId:
+    Description: Internet Gateway ID
+    Value: !Ref InternetGateway
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-IGWId"
 
 Resources:
 
-  # ── VPC ──────────────────────────────────────────────────────
+  # ─────────────────────────────────────────────
+  # VPC
+  # ─────────────────────────────────────────────
   VPC:
     Type: AWS::EC2::VPC
     Properties:
-      CidrBlock: 10.0.0.0/16
+      CidrBlock: !Ref VpcCidr
       EnableDnsHostnames: true
       EnableDnsSupport: true
       Tags:
         - Key: Name
-          Value: !Sub ${ProjectName}-vpc
+          Value: !Sub "${ProjectName}-${Environment}-vpc"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
 
-  # ── Internet Gateway ─────────────────────────────────────────
+  # ─────────────────────────────────────────────
+  # Internet Gateway
+  # Free — no hourly charge, no data charge.
+  # Replaces NAT Gateway entirely for this setup.
+  # ─────────────────────────────────────────────
   InternetGateway:
     Type: AWS::EC2::InternetGateway
     Properties:
       Tags:
         - Key: Name
-          Value: !Sub ${ProjectName}-igw
+          Value: !Sub "${ProjectName}-${Environment}-igw"
+        - Key: Project
+          Value: !Ref ProjectName
 
   InternetGatewayAttachment:
     Type: AWS::EC2::VPCGatewayAttachment
@@ -40,74 +98,55 @@ Resources:
       VpcId: !Ref VPC
       InternetGatewayId: !Ref InternetGateway
 
-  # ── Public Subnets (ALB + NAT Gateway live here) ─────────────
+  # ─────────────────────────────────────────────
+  # Public Subnets (2 AZs for ALB requirement)
+  # ALB requires at least 2 subnets in different AZs.
+  # Both subnets are public — no private subnets needed.
+  # ─────────────────────────────────────────────
   PublicSubnet1:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
-      CidrBlock: 10.0.1.0/24
-      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: !Ref PublicSubnet1Cidr
+      AvailabilityZone: eu-west-2a
       MapPublicIpOnLaunch: true
       Tags:
         - Key: Name
-          Value: !Sub ${ProjectName}-public-subnet-1
+          Value: !Sub "${ProjectName}-${Environment}-public-subnet-1"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Type
+          Value: Public
 
   PublicSubnet2:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
-      CidrBlock: 10.0.2.0/24
-      AvailabilityZone: !Select [1, !GetAZs '']
+      CidrBlock: !Ref PublicSubnet2Cidr
+      AvailabilityZone: eu-west-2b
       MapPublicIpOnLaunch: true
       Tags:
         - Key: Name
-          Value: !Sub ${ProjectName}-public-subnet-2
+          Value: !Sub "${ProjectName}-${Environment}-public-subnet-2"
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Type
+          Value: Public
 
-  # ── Private Subnets (ECS + RDS + ElastiCache live here) ──────
-  PrivateSubnet1:
-    Type: AWS::EC2::Subnet
-    Properties:
-      VpcId: !Ref VPC
-      CidrBlock: 10.0.3.0/24
-      AvailabilityZone: !Select [0, !GetAZs '']
-      Tags:
-        - Key: Name
-          Value: !Sub ${ProjectName}-private-subnet-1
-
-  PrivateSubnet2:
-    Type: AWS::EC2::Subnet
-    Properties:
-      VpcId: !Ref VPC
-      CidrBlock: 10.0.4.0/24
-      AvailabilityZone: !Select [1, !GetAZs '']
-      Tags:
-        - Key: Name
-          Value: !Sub ${ProjectName}-private-subnet-2
-
-  # ── NAT Gateway (allows private subnets to reach internet) ───
-  NatGatewayEIP:
-    Type: AWS::EC2::EIP
-    DependsOn: InternetGatewayAttachment
-    Properties:
-      Domain: vpc
-
-  NatGateway:
-    Type: AWS::EC2::NatGateway
-    Properties:
-      AllocationId: !GetAtt NatGatewayEIP.AllocationId
-      SubnetId: !Ref PublicSubnet1
-      Tags:
-        - Key: Name
-          Value: !Sub ${ProjectName}-nat-gateway
-
-  # ── Route Tables ─────────────────────────────────────────────
+  # ─────────────────────────────────────────────
+  # Route Table — single public route table
+  # All subnets route 0.0.0.0/0 → Internet Gateway.
+  # Free — no charge for route tables.
+  # ─────────────────────────────────────────────
   PublicRouteTable:
     Type: AWS::EC2::RouteTable
     Properties:
       VpcId: !Ref VPC
       Tags:
         - Key: Name
-          Value: !Sub ${ProjectName}-public-rt
+          Value: !Sub "${ProjectName}-${Environment}-public-rt"
+        - Key: Project
+          Value: !Ref ProjectName
 
   PublicRoute:
     Type: AWS::EC2::Route
@@ -120,130 +159,210 @@ Resources:
   PublicSubnet1RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
-      RouteTableId: !Ref PublicRouteTable
       SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
 
   PublicSubnet2RouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
-      RouteTableId: !Ref PublicRouteTable
       SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
 
-  PrivateRouteTable:
-    Type: AWS::EC2::RouteTable
+  # ─────────────────────────────────────────────
+  # VPC Endpoints — FREE data transfer for AWS services
+  # Without these, ECR/S3 traffic goes over the internet
+  # and counts as data transfer cost.
+  # With these, traffic stays inside AWS network = free.
+  # ─────────────────────────────────────────────
+
+  # S3 Gateway Endpoint (completely free)
+  S3VPCEndpoint:
+    Type: AWS::EC2::VPCEndpoint
     Properties:
       VpcId: !Ref VPC
-      Tags:
-        - Key: Name
-          Value: !Sub ${ProjectName}-private-rt
+      ServiceName: !Sub "com.amazonaws.eu-west-2.s3"
+      VpcEndpointType: Gateway
+      RouteTableIds:
+        - !Ref PublicRouteTable
 
-  PrivateRoute:
-    Type: AWS::EC2::Route
-    Properties:
-      RouteTableId: !Ref PrivateRouteTable
-      DestinationCidrBlock: 0.0.0.0/0
-      NatGatewayId: !Ref NatGateway
+  # ─────────────────────────────────────────────
+  # Security Groups
+  # ─────────────────────────────────────────────
 
-  PrivateSubnet1RouteTableAssociation:
-    Type: AWS::EC2::SubnetRouteTableAssociation
-    Properties:
-      RouteTableId: !Ref PrivateRouteTable
-      SubnetId: !Ref PrivateSubnet1
-
-  PrivateSubnet2RouteTableAssociation:
-    Type: AWS::EC2::SubnetRouteTableAssociation
-    Properties:
-      RouteTableId: !Ref PrivateRouteTable
-      SubnetId: !Ref PrivateSubnet2
-
-  # ── Security Groups ──────────────────────────────────────────
+  # ALB Security Group — accepts HTTP/HTTPS from anywhere
   ALBSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupName: !Sub ${ProjectName}-alb-sg
-      GroupDescription: Security group for Application Load Balancer
+      GroupName: !Sub "${ProjectName}-${Environment}-alb-sg"
+      GroupDescription: ALB - allows HTTP and HTTPS from internet
       VpcId: !Ref VPC
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 80
           ToPort: 80
           CidrIp: 0.0.0.0/0
+          Description: HTTP from internet
         - IpProtocol: tcp
           FromPort: 443
           ToPort: 443
           CidrIp: 0.0.0.0/0
+          Description: HTTPS from internet
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+          Description: All outbound
       Tags:
         - Key: Name
-          Value: !Sub ${ProjectName}-alb-sg
+          Value: !Sub "${ProjectName}-${Environment}-alb-sg"
+        - Key: Project
+          Value: !Ref ProjectName
 
-  ECSSecurityGroup:
+  # Frontend Security Group — only accepts traffic from ALB
+  FrontendSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupName: !Sub ${ProjectName}-ecs-sg
-      GroupDescription: Security group for ECS Fargate tasks
+      GroupName: !Sub "${ProjectName}-${Environment}-frontend-sg"
+      GroupDescription: Frontend ECS tasks - only accepts traffic from ALB
       VpcId: !Ref VPC
       SecurityGroupIngress:
         - IpProtocol: tcp
-          FromPort: 80
-          ToPort: 80
+          FromPort: 3000
+          ToPort: 3000
           SourceSecurityGroupId: !Ref ALBSecurityGroup
+          Description: Traffic from ALB only
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+          Description: All outbound (needed to reach ECR, Secrets Manager)
       Tags:
         - Key: Name
-          Value: !Sub ${ProjectName}-ecs-sg
+          Value: !Sub "${ProjectName}-${Environment}-frontend-sg"
+        - Key: Project
+          Value: !Ref ProjectName
 
+  # Backend Security Group — only accepts traffic from Frontend tasks
+  BackendSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${ProjectName}-${Environment}-backend-sg"
+      GroupDescription: Backend ECS tasks - only accepts traffic from Frontend
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          SourceSecurityGroupId: !Ref FrontendSecurityGroup
+          Description: Traffic from Frontend tasks only
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+          Description: Traffic from ALB for health checks
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+          Description: All outbound (needed to reach RDS, ElastiCache, ECR)
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-backend-sg"
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # RDS Security Group — only accepts traffic from Backend tasks
   RDSSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupName: !Sub ${ProjectName}-rds-sg
-      GroupDescription: Security group for RDS database
+      GroupName: !Sub "${ProjectName}-${Environment}-rds-sg"
+      GroupDescription: RDS - only accepts traffic from Backend ECS tasks
       VpcId: !Ref VPC
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 3306
           ToPort: 3306
-          SourceSecurityGroupId: !Ref ECSSecurityGroup
+          SourceSecurityGroupId: !Ref BackendSecurityGroup
+          Description: MySQL from Backend tasks only
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+          Description: All outbound
       Tags:
         - Key: Name
-          Value: !Sub ${ProjectName}-rds-sg
+          Value: !Sub "${ProjectName}-${Environment}-rds-sg"
+        - Key: Project
+          Value: !Ref ProjectName
 
-# ── Outputs (referenced by other stacks) ─────────────────────
-Outputs:
-  VpcId:
-    Value: !Ref VPC
-    Export:
-      Name: finpay-vpc-VpcId
+  # ElastiCache Security Group — only accepts traffic from Backend tasks
+  ElastiCacheSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${ProjectName}-${Environment}-elasticache-sg"
+      GroupDescription: ElastiCache - only accepts traffic from Backend ECS tasks
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 6379
+          ToPort: 6379
+          SourceSecurityGroupId: !Ref BackendSecurityGroup
+          Description: Redis from Backend tasks only
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+          Description: All outbound
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-${Environment}-elasticache-sg"
+        - Key: Project
+          Value: !Ref ProjectName
 
-  PublicSubnet1Id:
-    Value: !Ref PublicSubnet1
-    Export:
-      Name: finpay-vpc-PublicSubnet1Id
+  # ─────────────────────────────────────────────
+  # VPC Flow Logs (optional but good for dissertation)
+  # Shows network traffic in your dissertation report.
+  # Uses CloudWatch Logs — minimal cost.
+  # Comment out if you want to save every penny.
+  # ─────────────────────────────────────────────
+  VPCFlowLogsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${Environment}-vpc-flowlogs-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: vpc-flow-logs.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: FlowLogsPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                Resource: "*"
 
-  PublicSubnet2Id:
-    Value: !Ref PublicSubnet2
-    Export:
-      Name: finpay-vpc-PublicSubnet2Id
+  VPCFlowLogsGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/vpc/${ProjectName}/${Environment}/flowlogs"
+      RetentionInDays: 7
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
 
-  PrivateSubnet1Id:
-    Value: !Ref PrivateSubnet1
-    Export:
-      Name: finpay-vpc-PrivateSubnet1Id
-
-  PrivateSubnet2Id:
-    Value: !Ref PrivateSubnet2
-    Export:
-      Name: finpay-vpc-PrivateSubnet2Id
-
-  ALBSecurityGroupId:
-    Value: !Ref ALBSecurityGroup
-    Export:
-      Name: finpay-vpc-ALBSecurityGroupId
-
-  ECSSecurityGroupId:
-    Value: !Ref ECSSecurityGroup
-    Export:
-      Name: finpay-vpc-ECSSecurityGroupId
-
-  RDSSecurityGroupId:
-    Value: !Ref RDSSecurityGroup
-    Export:
-      Name: finpay-vpc-RDSSecurityGroupId
+  VPCFlowLogs:
+    Type: AWS::EC2::FlowLog
+    Properties:
+      ResourceId: !Ref VPC
+      ResourceType: VPC
+      TrafficType: ALL
+      LogDestinationType: cloud-watch-logs
+      LogGroupName: !Ref VPCFlowLogsGroup
+      DeliverLogsPermissionArn: !GetAtt VPCFlowLogsRole.Arn
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
