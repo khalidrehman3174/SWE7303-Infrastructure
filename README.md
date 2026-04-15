@@ -1,23 +1,25 @@
-# 🏗️ Finpay Technologies — AWS Infrastructure
+# 🏗️ Finpay Technologies — DevOps Project
 
-**Finpay Technologies — Cloud-Native DevOps Infrastructure on AWS**
+**Cloud-Native Fintech Platform — Full DevOps Implementation on AWS**
 
 [![AWS](https://img.shields.io/badge/AWS-eu--west--2-FF9900?logo=amazonaws&logoColor=white)](https://aws.amazon.com)
 [![IaC](https://img.shields.io/badge/IaC-CloudFormation-blue)](https://aws.amazon.com/cloudformation/)
 [![ECS](https://img.shields.io/badge/Compute-ECS%20Fargate-orange?logo=amazonaws)](https://aws.amazon.com/fargate/)
-[![CI/CD](https://img.shields.io/badge/CI%2FCD-CodePipeline-purple?logo=amazonaws)](https://aws.amazon.com/codepipeline/)
-[![RDS](https://img.shields.io/badge/Database-RDS%20MySQL-blue?logo=amazonaws)](https://aws.amazon.com/rds/)
+[![CI/CD](https://img.shields.io/badge/CI%2FCD-CodePipeline%20%2B%20CodeBuild-purple?logo=amazonaws)](https://aws.amazon.com/codepipeline/)
+[![PHP](https://img.shields.io/badge/Backend-PHP%208.2-777BB4?logo=php&logoColor=white)](https://www.php.net)
+[![Docker](https://img.shields.io/badge/Container-Docker-2496ED?logo=docker&logoColor=white)](https://www.docker.com)
+[![API](https://img.shields.io/badge/API-CoinGecko%20Live%20Prices-green)](https://www.coingecko.com/en/api)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 ---
 
 ## Overview
 
-A fully automated, cloud-native AWS infrastructure for the Finpay Technologies fintech platform, provisioned entirely using **Infrastructure as Code (CloudFormation)** and deployed via a dedicated **CI/CD pipeline (AWS CodePipeline)**.
+A fully automated, cloud-native DevOps solution for Finpay Technologies — a fintech platform simulating cryptocurrency wallet management with real-time market data. Built end-to-end on **AWS** using **Infrastructure as Code**, **containerised compute**, and **fully automated CI/CD pipelines**.
 
-The infrastructure supports a containerised PHP application running on **ECS Fargate**, exposed via an **Application Load Balancer**, backed by **Amazon RDS MySQL**, with **Auto Scaling** validated from 1 to 4 Fargate tasks under live load testing. All resources are defined in a single CloudFormation template — no manual console clicks.
+The entire infrastructure — VPC, ECS Fargate, ALB, RDS MySQL, IAM roles, Security Groups — is defined in a single **CloudFormation template** and deployed via a dedicated pipeline. The PHP application is containerised with **Docker**, stored in **ECR**, and deployed automatically on every commit. **Auto Scaling** was validated live — scaling from 1 to 4 Fargate tasks under load and back down automatically.
 
-> ⚠️ Infrastructure has been decommissioned after project completion to manage AWS costs.
+> ⚠️ Infrastructure decommissioned after project completion to manage AWS costs.
 
 ---
 
@@ -33,9 +35,11 @@ Application Load Balancer (ALB)
 ECS Fargate Service (Auto Scaling: 1–4 tasks)
     │  PHP Application Container (pulled from ECR)
     │  Multi-AZ: eu-west-2a + eu-west-2b
-    ▼
-Amazon RDS MySQL
-    └── Users | Wallets | Transactions
+    │                    │
+    ▼                    ▼
+Amazon RDS MySQL    CoinGecko API
+(Users, Wallets,    (Live BTC/ETH
+ Transactions)       prices)
 ```
 
 | Layer | Service | Purpose |
@@ -48,28 +52,108 @@ Amazon RDS MySQL
 | Load Balancing | Application Load Balancer | Traffic distribution and health checks |
 | Database | Amazon RDS MySQL | Relational data persistence |
 | Scaling | Application Auto Scaling | CPU-based target tracking (50% threshold) |
-| CI/CD | AWS CodePipeline | Automated infrastructure deployment |
+| CI/CD | AWS CodePipeline + CodeBuild | Automated infra and app deployment |
 | Monitoring | Amazon CloudWatch | Logs, metrics, and alarms |
 | Security | AWS IAM | Least-privilege roles and policies |
+| External API | CoinGecko | Live cryptocurrency market prices |
 
 ---
 
-## Repository
+## Repositories
 
-![Infra Repo](screenshots/infra-repo-main.png)
+![Repos](screenshots/infra-repo-main.png)
 *Infrastructure repository — main.yml CloudFormation template*
 
-![Infra Commits](screenshots/infra-repo-commits.png)
-*Commit history — all infrastructure changes version controlled*
+🔗 **Infrastructure:** [SWE7303-Infrastructure](https://github.com/khalidrehman3174/SWE7303-Infrastructure) — CloudFormation IaC, VPC, ECS, RDS, ALB, Auto Scaling
+
+🔗 **Application:** [SWE7303-Application](https://github.com/khalidrehman3174/SWE7303-Application) — PHP app, Dockerfile, buildspec.yml, CoinGecko API
 
 ---
 
-## CloudFormation Template (main.yml)
+## Live Application
+
+![Landing Page](screenshots/landing-page.png)
+*Finpay Technologies — live on AWS via Application Load Balancer*
+
+![ALB DNS](screenshots/alb-dns.png)
+*Application served via ALB DNS endpoint*
+
+### Application Features
 
 | | |
 |---|---|
-| ![main.yml part 1](screenshots/main-yml-1.png) | ![main.yml part 2](screenshots/main-yml-2.png) |
-| *CloudFormation template — resources definition* | *CloudFormation template — continued* |
+| ![Signup](screenshots/signup-page.png) | ![Dashboard](screenshots/dashboard.png) |
+| *User registration page* | *Dashboard — wallet balances* |
+| ![Crypto Prices](screenshots/crypto-prices.png) | ![Transaction History](screenshots/transaction-history.png) |
+| *Live CoinGecko API prices — BTC, ETH real-time* | *Transaction history — balance updated* |
+
+| | |
+|---|---|
+| ![Add Payee](screenshots/add-payee.png) | ![Send Payment](screenshots/send-payment.png) |
+| *Adding a new payee* | *Sending payment to registered payee* |
+
+---
+
+## Application Repository
+
+![App Repo](screenshots/app-repo-main.png)
+*Application repository — full project structure*
+
+![App Commits](screenshots/app-repo-commits.png)
+*Commit history — active development record*
+
+### Dockerfile & Buildspec
+
+| | |
+|---|---|
+| ![Dockerfile](screenshots/dockerfile.png) | ![Buildspec](screenshots/buildspec.png) |
+| *Dockerfile — PHP-Apache base image* | *buildspec.yml — CodeBuild instructions* |
+
+---
+
+## CI/CD Pipelines
+
+Two independent pipelines — infrastructure and application deploy separately, enforcing separation of concerns.
+
+![Pipelines List](screenshots/pipelines-list.png)
+*Both pipelines — finpay-infra-pipeline and finpay-app-pipeline — Succeeded*
+
+### Infrastructure Pipeline
+
+| | |
+|---|---|
+| ![Infra Pipeline](screenshots/infra-pipeline-running.png) | ![Infra Executions](screenshots/infra-pipeline-executions.png) |
+| *finpay-infra-pipeline — all stages succeeded* | *Pipeline execution history* |
+
+### Application Pipeline
+
+```
+GitHub Push → CodePipeline → CodeBuild → ECR → ECS Rolling Deploy ✅
+```
+
+| | |
+|---|---|
+| ![App Pipeline](screenshots/app-pipeline-detail.png) | ![App Execution](screenshots/app-pipeline-execution.png) |
+| *finpay-app-pipeline — Source → Build → Deploy* | *Latest execution — timestamps and results* |
+
+### CodeBuild
+
+| | |
+|---|---|
+| ![CodeBuild Project](screenshots/codebuild-project.png) | ![CodeBuild History](screenshots/codebuild-history.png) |
+| *CodeBuild project* | *Build history — succeeded builds* |
+
+![CodeBuild Phases](screenshots/codebuild-phases.png)
+*Build phase detail — all phases succeeded*
+
+---
+
+## Amazon ECR
+
+| | |
+|---|---|
+| ![ECR Repo](screenshots/ecr-repo.png) | ![ECR Image](screenshots/ecr-image.png) |
+| *ECR repository* | *Docker image — latest tag with push timestamp* |
 
 ---
 
@@ -78,21 +162,12 @@ Amazon RDS MySQL
 | | |
 |---|---|
 | ![CF Stack](screenshots/cloudformation-stack.png) | ![CF Resources 1](screenshots/cloudformation-resources-1.png) |
-| *CloudFormation stack — CREATE_COMPLETE* | *Stack resources — all services provisioned* |
-| ![CF Resources 2](screenshots/cloudformation-resources-2.png) | ![CF Events](screenshots/cloudformation-events.png) |
-| *Stack resources — continued* | *Stack events — deployment log* |
-
----
-
-## CI/CD Pipelines
-
-![Pipelines List](screenshots/pipelines-list.png)
-*Both pipelines — finpay-infra-pipeline and finpay-app-pipeline — Succeeded*
+| *Stack — CREATE_COMPLETE* | *Stack resources — all services provisioned* |
 
 | | |
 |---|---|
-| ![Infra Pipeline](screenshots/infra-pipeline-running.png) | ![Infra Executions](screenshots/infra-pipeline-executions.png) |
-| *finpay-infra-pipeline — all stages succeeded* | *Pipeline execution history* |
+| ![CF Resources 2](screenshots/cloudformation-resources-2.png) | ![CF Events](screenshots/cloudformation-events.png) |
+| *Stack resources — continued* | *Stack events — deployment log* |
 
 ---
 
@@ -148,12 +223,12 @@ Amazon RDS MySQL
 | | |
 |---|---|
 | ![AS Defined](screenshots/autoscaling-defined.png) | ![AS Config](screenshots/autoscaling-config.png) |
-| *Auto Scaling policy defined on ECS service* | *Target tracking — ECSServiceAverageCPUUtilization 50%* |
+| *Auto Scaling policy on ECS service* | *Target tracking — CPU 50% threshold* |
 
 ### Load Test
 
 ![Load Test](screenshots/autoscaling-load-test.png)
-*hey HTTP load generator — 100,000 requests fired from AWS CloudShell*
+*hey HTTP load generator — 100,000 requests from AWS CloudShell*
 
 ### Scale-Out
 
@@ -176,14 +251,12 @@ Amazon RDS MySQL
 | | |
 |---|---|
 | ![CPU Low](screenshots/cpu-low.png) | ![Scaled Down](screenshots/scaled-down-to-1.png) |
-| *CPU utilisation returned to baseline* | *Containers scaled back down to 1* |
+| *CPU returned to baseline* | *Containers scaled back down to 1* |
 
 ![Activity Log](screenshots/autoscaling-activity-log.png)
-*Auto Scaling activity log — full scale-out and scale-in cycle recorded*
+*Auto Scaling activity log — full scale-out and scale-in cycle*
 
----
-
-## Auto Scaling Results
+### Auto Scaling Results
 
 | Metric | Result |
 |--------|--------|
@@ -198,33 +271,22 @@ Amazon RDS MySQL
 
 ## Key Design Decisions
 
-**No NAT Gateway** — Public subnets with an Internet Gateway eliminate ~£25/month NAT costs for a development deployment.
+**No NAT Gateway** — Public subnets with Internet Gateway eliminate ~£25/month NAT costs for a development deployment.
 
-**Fargate over EC2** — No server management, patching, or resizing. Per-task billing for cost control.
+**Fargate over EC2** — No server management or patching. Per-task billing for precise cost control.
 
-**Dual-pipeline architecture** — Infrastructure and application deploy independently. A code push never triggers infrastructure changes and vice versa.
+**Dual-pipeline architecture** — Infrastructure and application deploy independently. A code push never triggers infrastructure changes.
 
-**RDS MySQL over DynamoDB** — Finpay requires relational data with ACID transactions. RDS is the correct choice.
+**RDS MySQL over DynamoDB** — Finpay requires relational data with ACID transactions across users, wallets, and payments.
 
----
-
-## Deployment
-
-```bash
-# Deploy via AWS CLI
-aws cloudformation deploy \
-  --template-file main.yml \
-  --stack-name finpay-infra-stack \
-  --capabilities CAPABILITY_NAMED_IAM \
-  --region eu-west-2
-```
+**Dynamic IP + ALB** — Each Fargate task gets a new private IP on launch. The ALB provides a stable DNS endpoint, automatically registering and deregistering tasks as they scale.
 
 ---
 
 ## Teardown
 
 ```bash
-# Delete CloudFormation stack (removes all resources)
+# Delete CloudFormation stack (removes all provisioned resources)
 aws cloudformation delete-stack \
   --stack-name finpay-infra-stack \
   --region eu-west-2
@@ -241,13 +303,16 @@ aws codepipeline delete-pipeline --name finpay-app-pipeline
 
 ## Tech Stack
 
-`AWS CloudFormation` · `Amazon ECS Fargate` · `Amazon ECR` · `Amazon RDS MySQL` · `Application Load Balancer` · `AWS CodePipeline` · `Amazon CloudWatch` · `Amazon VPC` · `AWS IAM` · `Docker`
+`AWS CloudFormation` · `Amazon ECS Fargate` · `Amazon ECR` · `Amazon RDS MySQL` · `Application Load Balancer` · `AWS CodePipeline` · `AWS CodeBuild` · `Amazon CloudWatch` · `Amazon VPC` · `AWS IAM` · `Docker` · `PHP 8.2` · `MySQL` · `CoinGecko API`
 
 ---
 
-## Related Repository
+## Team
 
-🔗 [Finpay Application Repository](https://github.com/khalidrehman3174/SWE7303-Application) — PHP application, Dockerfile, buildspec.yml, CoinGecko API integration
+| Role | Name |
+|------|------|
+| DevOps Engineer & Infrastructure | Khalid Rehman |
+| Application Developer | Samuel Orkenwaye |
 
 ---
 
