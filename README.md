@@ -283,24 +283,6 @@ GitHub Push → CodePipeline → CodeBuild → ECR → ECS Rolling Deploy ✅
 
 ---
 
-## Teardown
-
-```bash
-# Delete CloudFormation stack (removes all provisioned resources)
-aws cloudformation delete-stack \
-  --stack-name finpay-infra-stack \
-  --region eu-west-2
-
-# Delete ECR repository
-aws ecr delete-repository --repository-name finpay-app --force --region eu-west-2
-
-# Delete pipelines
-aws codepipeline delete-pipeline --name finpay-infra-pipeline
-aws codepipeline delete-pipeline --name finpay-app-pipeline
-```
-
----
-
 ## Tech Stack
 
 `AWS CloudFormation` · `Amazon ECS Fargate` · `Amazon ECR` · `Amazon RDS MySQL` · `Application Load Balancer` · `AWS CodePipeline` · `AWS CodeBuild` · `Amazon CloudWatch` · `Amazon VPC` · `AWS IAM` · `Docker` · `PHP 8.2` · `MySQL` · `CoinGecko API`
