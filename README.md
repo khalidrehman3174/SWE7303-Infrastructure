@@ -294,11 +294,15 @@ GitHub Push → CodePipeline → CodeBuild → ECR → ECS Rolling Deploy ✅
 | Role | Name |
 |------|------|
 | DevOps Engineer & Infrastructure | Khalid Rehman |
-| Application Developer | Samuel Orkenwaye |
+| Application Developer | Samuel Onyekwere |
 
 ---
 
 ## Author
 
-**Khalid Rehman** — AWS Solutions Architect Associate | MSc Cloud Computing & Network Security, University of Bolton
+**Khalid Rehman** — AWS Solutions Architect Associate | MSc Cloud Computing & Network Security, University of Greater Manchester
+
+**Samuel Onyekwere** —  MSc Cloud Computing & Network Security, University of Greater Manchester
+
+
 Deployed in `eu-west-2` (London)
